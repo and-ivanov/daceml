@@ -486,7 +486,7 @@ def expand_node(node, state, sdfg):
                          language=dace.dtypes.Language.CPP)
     tasklet.environments = {"ONNXRuntime"}
 
-    if len(output_copy_required) != 0 or len(input_copy_required) != 0:
+    if True:
         nsdfg = dace.SDFG("nested_{}".format(unique_id))
         nstate = nsdfg.add_state()
         ntasklet = deepcopy(tasklet)

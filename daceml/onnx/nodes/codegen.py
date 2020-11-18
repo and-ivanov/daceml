@@ -333,7 +333,7 @@ def expand_node(node, state, sdfg):
 
         parameter_name = edge.dst_conn if is_input else edge.src_conn
 
-        if len(output_copy_required) != 0 or len(input_copy_required) != 0:
+        if True:
             edge_connector_name = "_conn_" + parameter_name
         else:
             edge_connector_name = parameter_name

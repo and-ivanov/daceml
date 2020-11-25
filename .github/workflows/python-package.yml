@@ -22,11 +22,9 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
-      run: |
-        make install
+      run: make install
     - name: Check formatting
-      run: |
-        make check-formatting
+      run: make check-formatting
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -48,14 +46,11 @@ jobs:
         make install
     - name: Test with pytest
       env:
-        ORT_RELEASE=onnxruntime_dist_cpu
-        VENV_PATH=''
-        PYTEST_ARGS="--cov=daceml --cov-report=term --cov-report xml --cov-config=.coveragerc"
-      run: |
-        make test
+        ORT_RELEASE: onnxruntime_dist_cpu
+        VENV_PATH: ''
+        PYTEST_ARGS: --cov=daceml --cov-report=term --cov-report xml --cov-config=.coveragerc
+      run: make test
     - name: Test with doctest
-      run: |
-        make doctest
+      run: make doctest
     - name: Upload coverage
-      run: |
-        make codecov
+      run: make codecov

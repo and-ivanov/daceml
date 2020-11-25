@@ -27,17 +27,17 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: |
-	    wget https://github.com/orausch/onnxruntime/releases/download/build1/onnxruntime_dist_cpu.tar.gz
-	    tar -xzf onnxruntime_dist_cpu.tar.gz
-	    make install
+        wget https://github.com/orausch/onnxruntime/releases/download/build1/onnxruntime_dist_cpu.tar.gz
+        tar -xzf onnxruntime_dist_cpu.tar.gz
+        make install
     - name: Test with pytest
       run: |
         export ORT_RELEASE=onnxruntime_dist_cpu
-  		export VENV_PATH=''
-		export PYTEST_ARGS="--cov=daceml --cov-report=term --cov-report xml --cov-config=.coveragerc"
-		make test
+        export VENV_PATH=''
+        export PYTEST_ARGS="--cov=daceml --cov-report=term --cov-report xml --cov-config=.coveragerc"
+        make test
     - name: Test with doctest
       run: |
-	    make doctest
-	    make codecov
-	    make check-formatting
+        make doctest
+        make codecov
+        make check-formatting

@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VENV_PATH: ''
-      ORT_RELEASE: ${{ github.action_path }}/onnxruntime_dist_cpu
+      ORT_RELEASE: ${{ github.action_path }}/daceml/onnxruntime_dist_cpu
 
     steps:
     - uses: actions/checkout@v2

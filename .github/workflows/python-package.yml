@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VENV_PATH: ''
+      ORT_RELEASE: onnxruntime_dist_cpu
 
     steps:
     - uses: actions/checkout@v2
@@ -48,7 +49,6 @@ jobs:
         make install
     - name: Test with pytest
       env:
-        ORT_RELEASE: onnxruntime_dist_cpu
         PYTEST_ARGS: --cov=daceml --cov-report=term --cov-report xml --cov-config=.coveragerc
       run: make test
     - name: Test with doctest

@@ -46,37 +46,21 @@ jobs:
       with:
         python-version: 3.7
 
-    - name: Debug
-      env:
-        ORT_RELEASE: ${{ github.workspace }}/daceml/onnxruntime_dist_cpu
-      run: |
-        ls
-        ls ..
-        echo $ORT_RELEASE
-
     - name: Install dependencies
       run: |
         wget https://github.com/orausch/onnxruntime/releases/download/build1/onnxruntime_dist_cpu.tar.gz
         tar -xzf onnxruntime_dist_cpu.tar.gz
         make install
 
-    - name: Debug
-      env:
-        ORT_RELEASE: ${{ github.workspace }}/daceml/onnxruntime_dist_cpu
-      run: |
-        ls
-        ls ..
-        echo $ORT_RELEASE
-
     - name: Test with pytest
       env:
-        ORT_RELEASE: ${{ github.workspace }}/daceml/onnxruntime_dist_cpu
+        ORT_RELEASE: ${{ github.workspace }}/onnxruntime_dist_cpu
         PYTEST_ARGS: --cov=daceml --cov-report=term --cov-report xml --cov-config=.coveragerc
       run: make test
 
     - name: Test with doctest
       env:
-        ORT_RELEASE: ${{ github.workspace }}/daceml/onnxruntime_dist_cpu
+        ORT_RELEASE: ${{ github.workspace }}/onnxruntime_dist_cpu
       run: make doctest
 
     - name: Upload coverage

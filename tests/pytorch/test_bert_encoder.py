@@ -222,10 +222,7 @@ def test_bert_encoder_transformations():
 
     from dace.transformation.dataflow.clean_connectors import UnifyInOutNestedSDFGConnectors
 
-    #softmax_sdfg.apply_transformations_repeated([UnifyInOutNestedSDFGConnectors], validate_all=True, print_report=True)
-    softmax_sdfg.apply_transformations_repeated([UnifyInOutNestedSDFGConnectors], validate=False, print_report=True)
-
-    #softmax_sdfg.validate()
+    softmax_sdfg.apply_transformations_repeated([UnifyInOutNestedSDFGConnectors], validate_all=True, print_report=True)
 
     dace_model.sdfg.save('attn11.sdfg')
     print('attn11.sdfg')

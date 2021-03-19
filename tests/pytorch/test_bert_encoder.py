@@ -229,7 +229,16 @@ def test_bert_encoder_transformations():
 
     from dace.transformation.interstate.warp_all_reduce_detection import WarpAllReduceDetectionNoTasklet
 
-    softmax_sdfg.apply_transformations_repeated([WarpAllReduceDetectionNoTasklet], validate_all=True, print_report=True)
+    pattern = sdutil.node_path_graph(sdfg_nodes.AccessNode('_'), sdfg_nodes.AccessNode('_'))
+
+    for subgraph in enumerate_matches(softmax_sdfg, pattern):
+        if subgraph.nodes()[0].data == 'trans__out':
+            WarpAllReduceDetectionNoTasklet.apply_to(subgraph.graph.parent,
+                                                     src_access=subgraph.nodes()[0],
+                                                     dst_access=subgraph.nodes()[1],
+                                                     verify=False)
+
+    #softmax_sdfg.apply_transformations_repeated([WarpAllReduceDetectionNoTasklet], validate_all=True, print_report=True)
 
     dace_model.sdfg.save('attn12.sdfg')
     print('attn12.sdfg')

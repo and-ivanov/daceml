@@ -277,7 +277,6 @@ class DaceModule(nn.Module, frontend_common.SDFGConvertible):
                 training=(TrainingMode.TRAINING
                           if self.training else TrainingMode.EVAL),
                 opset_version=12,
-                strip_doc_string=False,
                 export_params=not self.backward,
                 # pytorch constant folding will add new unnamed inputs to the graph and remove some of the
                 # named parameters of the model: this means that we can't match with the state dict

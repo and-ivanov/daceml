@@ -845,6 +845,9 @@ class PureSliceAllConstant(ONNXForward):
     def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
                                sdfg: SDFG) -> bool:
         for inconn in ("axes", "ends", "starts", "steps"):
+            if state.in_edges_by_connector(node, inconn):
+                # optional argument is not set
+                continue
             if PureSliceAllConstant._get_constant(inconn, node, state,
                                                   sdfg) is None:
                 return False
@@ -858,6 +861,13 @@ class PureSliceAllConstant(ONNXForward):
         starts = PureSliceAllConstant._get_constant('starts', node, state,
                                                     sdfg)
         steps = PureSliceAllConstant._get_constant('steps', node, state, sdfg)
+        if steps is None:
+            if isinstance(starts, int):
+                steps = 1
+            elif isinstance(starts, (tuple, list)):
+                steps = [1 for _ in axes]
+            else:
+                raise RuntimeError("Unknown type")
 
         constant_folding.remove_node_and_computation(sdfg, state, node, "axes")
         constant_folding.remove_node_and_computation(sdfg, state, node, "ends")

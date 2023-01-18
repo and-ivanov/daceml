@@ -32,28 +32,28 @@ setup(
         "License :: OSI Approved :: BSD License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.6, <3.10',
+    python_requires='>=3.6',
     packages=find_packages(
         exclude=["*.tests", "*.tests.*", "tests.*", "tests"]),
     package_data={'': (['*.cpp'] + runtime_files)},
     install_requires=[
-        'dace@git+https://github.com/spcl/dace.git@backport-0.13-fixes',
-        'onnx == 1.7.0',  # we support opset v12
+        'dace',
+        'onnx',  # we support opset v12
         'torch',
-        'protobuf == 3.19',
-        'dataclasses; python_version < "3.7"',
-        'onnx-simplifier == 0.3.10'
+        'protobuf',
+        'dataclasses',
+        'onnx-simplifier'
     ],
     # install with pip and --find-links (see Makefile)
     # See https://github.com/pypa/pip/issues/5898
     extras_require={
         'testing': [
-            'coverage', 'pytest', 'yapf==0.31', 'pytest-cov', 'transformers',
+            'coverage', 'pytest', 'yapf', 'pytest-cov', 'transformers',
             'pytest-xdist', 'torchvision', 'tabulate', 'efficientnet_pytorch',
             'pytest-timeout'
         ],
         'docs': [
             'sphinx', 'sphinx_rtd_theme', 'sphinx-autodoc-typehints',
-            'sphinx-gallery', 'matplotlib', 'jinja2<3.1'
+            'sphinx-gallery', 'matplotlib', 'jinja2'
         ],
     })

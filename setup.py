@@ -40,7 +40,7 @@ setup(
         'dace',
         'onnx==1.7.0',  # we support opset v12
         'torch',
-        'protobuf',
+        'protobuf<3.21',
         'dataclasses',
         'onnx-simplifier'
     ],

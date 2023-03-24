@@ -16,9 +16,8 @@ from daceml.util.utils import in_desc_with_name, out_desc_with_name, in_edge_wit
 from daceml.onnx.op_implementations.utils import python_pure_op_implementation
 
 
-def _2d_sliding_window_index_expr(x_or_y, stride, kernel_size):
-    index_expression = "out_{x_or_y} * {stride} + h{x_or_y}"
-    return index_expression.format(x_or_y=x_or_y, stride=stride)
+def _2d_sliding_window_index_expr(x_or_y, stride, pad, kernel_size):
+    return f"out_{x_or_y} * {stride} + h{x_or_y} - {pad}"
 
 
 def _prod(sequence):
@@ -41,8 +40,7 @@ class PureMaxPool2D(ONNXForward):
         if image_dims != 2:
             return False
 
-        if node.pads is not None and (not all(p == 0 for p in node.pads)
-                                      or len(node.pads) != image_dims * 2):
+        if node.pads is not None and (len(node.pads) != image_dims * 2):
             return False
 
         if node.strides is not None and len(node.strides) != image_dims:
@@ -72,9 +70,13 @@ class PureMaxPool2D(ONNXForward):
         strides = node.strides if node.strides is not None else [
             1 for _ in range(image_dims)
         ]
+        pads = node.pads if node.pads is not None else [0 for _ in range(image_dims) * 2]
         stride_x, stride_y = strides
+        assert pads[0] == pads[2] and pads[1] == pads[3]
+        pad_x, pad_y, _, _ = pads
         filter_hx, filter_hy = node.kernel_shape
-        output_size_y, output_size_x = Y.shape[2:]
+        input_size_x, input_size_y = X.shape[2:]
+        output_size_x, output_size_y = Y.shape[2:]
 
         new_sdfg = dace.SDFG("pure_maxpool")
 
@@ -115,7 +117,17 @@ class PureMaxPool2D(ONNXForward):
         # the inner map computes the value for a single entry in the output array (i.e. Y[b, c, x, y])
         inner_me, inner_mx = new_state.add_map(
             'inner_pool_map',
-            dict(hx="0:{}".format(filter_hx), hy="0:{}".format(filter_hy)))
+            {
+                'hx': (
+                    f"max(0, {pad_x} - {stride_x} * out_x):"
+                    f"min({filter_hx}, {input_size_x} + {pad_x} - {stride_x} * out_x)"
+                ),
+                'hy': (
+                    f"max(0, {pad_y} - {stride_y} * out_y):"
+                    f"min({filter_hy}, {input_size_y} + {pad_y} - {stride_y} * out_x)"
+                ),
+            }
+        )
 
         compute_tasklet = new_state.add_tasklet("compute_entry",
                                                 inputs={"image_in"},
@@ -124,9 +136,11 @@ class PureMaxPool2D(ONNXForward):
 
         x_idx = _2d_sliding_window_index_expr(x_or_y="x",
                                               stride=stride_x,
+                                              pad=pad_x,
                                               kernel_size=filter_hx)
         y_idx = _2d_sliding_window_index_expr(x_or_y="y",
                                               stride=stride_y,
+                                              pad=pad_y,
                                               kernel_size=filter_hy)
 
         image_memlet = dace.Memlet("X[b, c, {}, {}]".format(x_idx, y_idx))
@@ -167,7 +181,7 @@ class PureConv2D(ONNXForward):
     """
     @staticmethod
     def forward_can_be_applied(node: ONNXOp, state: SDFGState,
-                               sdfg: SDFG) -> bool:
+                               sdfg: SDFG) -> bool:        
         X = in_desc_with_name(node, state, sdfg, "X")
         W = in_desc_with_name(node, state, sdfg, "W")
         try:
@@ -198,12 +212,10 @@ class PureConv2D(ONNXForward):
                                            len(node.dilations) != image_dims):
             return False
 
-        if node.pads is not None and (not all(p == 0 for p in node.pads)
-                                      or len(node.pads) != image_dims * 2):
+        if node.pads is not None and (len(node.pads) != image_dims * 2):
             return False
 
-        if node.strides is not None and (not all(s == 1 for s in node.strides)
-                                         or len(node.strides) != image_dims):
+        if node.strides is not None and (len(node.strides) != image_dims):
             return False
 
         if B is not None and B.shape[0] != num_filters:
@@ -234,7 +246,10 @@ class PureConv2D(ONNXForward):
         num_channels = X.shape[1]
         batch_size = X.shape[0]
 
+        input_size_x, input_size_y = X.shape[2:]
         output_size_y, output_size_x = Y.shape[2:]
+        stride_y, stride_x = node.strides
+        pad_x, pad_y, _, _ = node.pads
 
         dtype = X.dtype
 
@@ -268,11 +283,14 @@ class PureConv2D(ONNXForward):
                         0:batch_size, 0:num_filters, 0:output_size_y,
                         0:output_size_x, 0:num_channels, 0:filter_hx,
                         0:filter_hy]:
-                    with dace.tasklet:
-                        filter << W[m, cin, hx, hy]
-                        image << X[b, cin, hx + out_x, hy + out_y]
-                        out >> Y(1, lambda x, y: x + y)[b, m, out_x, out_y]
-                        out = filter * image
+                    sx = hx + out_x * stride_x - pad_x
+                    sy = hy + out_y * stride_y - pad_y
+                    if 0 <= sx and sx < input_size_x and 0 <= sy and sy < input_size_y:
+                        with dace.tasklet:
+                            filter << W[m, cin, hx, hy]
+                            image << X[b, cin, hx + out_x * stride_x - pad_x, hy + out_y * stride_y - pad_y]
+                            out >> Y(1, lambda x, y: x + y)[b, m, out_x, out_y]
+                            out = filter * image
         else:
 
             def conv(X, Y, W, B):
@@ -281,11 +299,14 @@ class PureConv2D(ONNXForward):
                         0:batch_size, 0:num_filters, 0:output_size_y,
                         0:output_size_x, 0:num_channels, 0:filter_hx,
                         0:filter_hy]:
-                    with dace.tasklet:
-                        filter << W[m, cin, hx, hy]
-                        image << X[b, cin, hx + out_x, hy + out_y]
-                        out >> Y(1, lambda x, y: x + y)[b, m, out_x, out_y]
-                        out = filter * image
+                    sx = hx + out_x * stride_x - pad_x
+                    sy = hy + out_y * stride_y - pad_y
+                    if 0 <= sx and sx < input_size_x and 0 <= sy and sy < input_size_y:
+                        with dace.tasklet:
+                            filter << W[m, cin, hx, hy]
+                            image << X[b, cin, hx + out_x * stride_x - pad_x, hy + out_y * stride_y - pad_y]
+                            out >> Y(1, lambda x, y: x + y)[b, m, out_x, out_y]
+                            out = filter * image
 
         nsdfg = program_for_node(conv, sdfg, state, node)
 

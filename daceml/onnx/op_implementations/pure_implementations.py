@@ -41,6 +41,193 @@ def Pow(X, Y, Z):
     Z[:] = X**Y
 
 
+@op_implementation(op="Concat", name="pure")
+class PureConcat(ONNXForward):
+    @staticmethod
+    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+                               sdfg: SDFG) -> bool:
+        return True
+    
+    @staticmethod
+    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+                sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        axis = node.axis
+        
+        num_inputs = len(state.in_edges(node))
+        
+        def inp_name(i):
+            return f"inputs__{i}"
+        out_name = "concat_result"
+        
+        inp_data = [in_desc_with_name(node, state, sdfg, inp_name(i)) for i in range(num_inputs)]
+        out_data = out_desc_with_name(node, state, sdfg, out_name)
+                
+        nsdfg = dace.SDFG(node.label)
+        
+        inp_data_descs = [copy.deepcopy(desc) for desc in inp_data]        
+        for i, desc in enumerate(inp_data_descs):
+            desc.transient = False
+            nsdfg.add_datadesc(inp_name(i), desc)
+        out_data_desc = copy.deepcopy(out_data)
+        out_data_desc.transient = False
+        nsdfg.add_datadesc(out_name, out_data_desc)
+        
+        inp_shapes = [d.shape for d in inp_data]
+        out_shape = out_data_desc.shape
+        
+        nstate = nsdfg.add_state()
+        out_write = nstate.add_write(out_name)
+        
+        for inp_idx in range(num_inputs):
+            inp_read = nstate.add_read(inp_name(inp_idx))
+        
+            tasklet = nstate.add_tasklet(
+                f'concat_{inp_idx}', 
+                {'inp': inp_data_descs[inp_idx].dtype},
+                {'out': out_data_desc.dtype},
+                "out = inp",
+            )
+            
+            map_entry, map_exit = nstate.add_map(
+                f"concat_map_{inp_idx}",
+                {f"i{i}": f"0:{s}" for i, s in enumerate(inp_shapes[inp_idx])}
+            )
+        
+            inp_access = [f'i{i}' for i, _ in enumerate(inp_shapes[inp_idx])]
+            inp_access_str = ", ".join(inp_access)
+            inp_memlet = dace.Memlet(f"{inp_name(inp_idx)}[{inp_access_str}]")
+            
+            stack_idx_offset = ""
+            for i in range(inp_idx):
+                stack_idx_offset += f" + ({inp_shapes[i][axis]})"
+            
+            out_access = [f'i{i}' for i, _ in enumerate(out_shape)]
+            if stack_idx_offset:
+                out_access[axis] += stack_idx_offset
+            out_access_str = ", ".join(out_access)
+            out_memlet = dace.Memlet(f"{out_name}[{out_access_str}]")
+            
+            nstate.add_memlet_path(
+                inp_read, map_entry, tasklet,
+                memlet=inp_memlet,
+                dst_conn="inp"
+            )
+            nstate.add_memlet_path(
+                tasklet, map_exit, out_write,
+                memlet=out_memlet,
+                src_conn="out"
+            )
+        
+        return nsdfg
+
+
+@op_implementation(op="Resize", name="pure")
+class PureResize(ONNXForward):
+    # https://github.com/onnx/onnx/blob/main/docs/Changelog.md#Resize-11
+    
+    @staticmethod
+    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+                               sdfg: SDFG) -> bool:
+        
+        if node.coordinate_transformation_mode != 'asymmetric':
+            import pdb; pdb.set_trace()
+            return False
+        
+        if node.exclude_outside != 0:
+            import pdb; pdb.set_trace()
+            return False
+        
+        if node.mode != 'nearest':
+            import pdb; pdb.set_trace()
+            return False
+        
+        if node.nearest_mode != 'floor':
+            import pdb; pdb.set_trace()
+            return False
+        
+        return True
+    
+    @staticmethod
+    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+                sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        
+        inp_name = 'X'
+        scales_name = 'scales'
+        roi_name = 'roi'
+        out_name = 'Y'
+        
+        nsdfg = dace.SDFG(node.label)
+        
+        inp_data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, inp_name))
+        inp_data_desc.transient = False
+        nsdfg.add_datadesc(inp_name, inp_data_desc)
+        
+        out_data_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, out_name))
+        out_data_desc.transient = False
+        nsdfg.add_datadesc(out_name, out_data_desc)
+        
+        scales_data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, scales_name))
+        scales_data_desc.transient = False
+        nsdfg.add_datadesc(scales_name, scales_data_desc)
+        
+        roi_data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, roi_name))
+        roi_data_desc.transient = False
+        nsdfg.add_datadesc(roi_name, roi_data_desc)
+        
+        num_dims = len(inp_data_desc.shape)
+        
+        # setup inner SDFG
+        nstate_empty = nsdfg.add_state()
+        nstate = nsdfg.add_state()
+        
+        interstate_edge = dace.InterstateEdge(
+            assignments={
+                f'{scales_name}{i}': f'{scales_name}[{i}]'
+                for i in range(num_dims)
+            }
+        )
+        nsdfg.add_edge(nstate_empty, nstate, interstate_edge)
+        
+        inp_read = nstate.add_read(inp_name)
+        out_write = nstate.add_write(out_name)
+        
+        map_entry, map_exit = nstate.add_map(
+            "map_reshape",
+            {f"i{i}": f"0:{n}" for i, n in enumerate(out_data_desc.shape)}
+        )
+        
+        tasklet = nstate.add_tasklet(
+            f'tasklet_reshape', 
+            {'inp': inp_data_desc.dtype},
+            {'out': out_data_desc.dtype},
+            "out = inp",
+        )
+        
+        out_access = [f'i{i}' for i, _ in enumerate(out_data_desc.shape)]
+        out_access_str = ", ".join(out_access)
+        out_memlet = dace.Memlet(f"{out_name}[{out_access_str}]")
+        
+        inp_access = [f'int(floor(i{i} / {scales_name}{i}))' for i, _ in enumerate(out_data_desc.shape)]
+        inp_access_str = ", ".join(inp_access)
+        inp_memlet = dace.Memlet(data=inp_name, subset=inp_access_str)
+                
+        nstate.add_memlet_path(
+            inp_read, map_entry, tasklet,
+            memlet=inp_memlet,
+            dst_conn="inp"
+        )
+        nstate.add_memlet_path(
+            tasklet, map_exit, out_write,
+            memlet=out_memlet,
+            src_conn="out"
+        )
+                
+        nsdfg.save('foo.sdfg')
+        #import pdb; pdb.set_trace()
+        
+        return nsdfg
+
+
 @op_implementation(op="Clip", name="pure")
 class PureClip(ONNXForward):
     @staticmethod

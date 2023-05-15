@@ -61,7 +61,8 @@ def onnx_constant_or_none(
     name = node_or_name if isinstance(node_or_name, str) else node_or_name.data
     if name not in sdfg._parent_onnx_model.clean_weights:
         return None
-    return sdfg._parent_onnx_model.clean_weights[name].item()
+    cten = sdfg._parent_onnx_model.clean_weights[name]
+    return cten.item() if cten.numel() == 1 else cten.tolist()
 
 
 class ReplacementTransformation(transformation.SingleStateTransformation):

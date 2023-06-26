@@ -167,35 +167,37 @@ def backward_method(pv: newast.ProgramVisitor,
     backward(pv, sdfg, state, self, grad)
 
 
-# FIXME hack to make sure BackwardPass nodes are expanded before other library nodes when using the python frontend
-_current_opt = config.Config.get("optimizer", "interface")
-_call_opt = config.Config.get("optimizer", "transform_on_call")
+# There are hooks now: https://github.com/spcl/dace/commit/d1a9a1458dc5a9d4a03bad316182c3746f96e874
+# 
+# # FIXME hack to make sure BackwardPass nodes are expanded before other library nodes when using the python frontend
+# _current_opt = config.Config.get("optimizer", "interface")
+# _call_opt = config.Config.get("optimizer", "transform_on_call")
 
-config.Config.set(
-    "optimizer",
-    "interface",
-    value="daceml.autodiff.library.python_frontend.BackwardPassExpander")
-config.Config.set("optimizer", "transform_on_call", value=True)
+# config.Config.set(
+#     "optimizer",
+#     "interface",
+#     value="daceml.autodiff.library.python_frontend.BackwardPassExpander")
+# config.Config.set("optimizer", "transform_on_call", value=True)
 
 
-class BackwardPassExpander(optimizer.Optimizer):
-    """
-    An optimizer that expands the backward pass nodes of an SDFG.
+# class BackwardPassExpander(optimizer.Optimizer):
+#     """
+#     An optimizer that expands the backward pass nodes of an SDFG.
 
-    Since optimizers are called before other transformations (and compilation)
-    in DaceProgram.__call_, this prevents other library nodes from being
-    expanded before the backward pass nodes.
+#     Since optimizers are called before other transformations (and compilation)
+#     in DaceProgram.__call_, this prevents other library nodes from being
+#     expanded before the backward pass nodes.
 
-    This is clearly a hack and will be replaced with better way to achieve this.
-    """
-    def optimize(self):
-        expand_nodes(self.sdfg, lambda n: isinstance(n, BackwardPass))
+#     This is clearly a hack and will be replaced with better way to achieve this.
+#     """
+#     def optimize(self):
+#         expand_nodes(self.sdfg, lambda n: isinstance(n, BackwardPass))
 
-        if _call_opt:
-            # try to call the original optimizer
-            optclass = dace.sdfg.sdfg._get_optimizer_class(_current_opt)
-            if optclass is not None:
-                opt = optclass(self.sdfg)
-                self.sdfg = opt.optimize()
+#         if _call_opt:
+#             # try to call the original optimizer
+#             optclass = dace.sdfg.sdfg._get_optimizer_class(_current_opt)
+#             if optclass is not None:
+#                 opt = optclass(self.sdfg)
+#                 self.sdfg = opt.optimize()
 
-        return self.sdfg
+#         return self.sdfg

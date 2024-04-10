@@ -499,8 +499,10 @@ def _get_schemas_from_version(version: int):
     all_schemas = []
     for name, schemas in name_to_schemas.items():
         schemas = sorted(schemas, key=lambda x: x.since_version)
-        while schemas[-1].since_version > version:
+        while schemas and schemas[-1].since_version > version:
             schemas.pop()
+        if not schemas:  # what if we dropeed all?
+            continue
 
         all_schemas.append(schemas[-1])
 

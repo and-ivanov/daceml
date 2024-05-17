@@ -140,8 +140,10 @@ class ONNXModel:
 
         onnx.checker.check_model(model)
         model = shape_inference.infer_shapes(model, auto_merge=auto_merge)
+        onnx.save(model, 'model_original.onnx')
         if onnx_simplify:
             model = simplify_onnx_model(model, auto_merge)
+            onnx.save(model, 'model_simplified.onnx')
 
         self.do_auto_optimize = auto_optimize
 

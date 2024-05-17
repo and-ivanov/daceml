@@ -130,19 +130,15 @@ class PureResize(ONNXForward):
                                sdfg: SDFG) -> bool:
         
         if node.coordinate_transformation_mode != 'asymmetric':
-            import pdb; pdb.set_trace()
             return False
         
         if node.exclude_outside != 0:
-            import pdb; pdb.set_trace()
             return False
         
         if node.mode != 'nearest':
-            import pdb; pdb.set_trace()
             return False
         
         if node.nearest_mode != 'floor':
-            import pdb; pdb.set_trace()
             return False
         
         return True
@@ -494,15 +490,14 @@ def ReduceMin(data, reduced):
 
 
 softmax_compute = dict(
-    axis=lambda node, input: list(range(len(input.shape)))[node.axis:],
-    keepdims=lambda node: node.axis != 0)
+    axis=lambda node, input: list(range(len(input.shape)))[node.axis:])
 
 
 @python_pure_op_implementation(**softmax_compute)
 def Softmax(input, output):
-    maximum = np.maximum.reduce(input, axis=axis, keepdims=keepdims)
+    maximum = np.maximum.reduce(input, axis=axis, keepdims=True)
     exponent = np.exp(input - maximum)
-    sum = np.add.reduce(exponent, axis=axis, keepdims=keepdims)
+    sum = np.add.reduce(exponent, axis=axis, keepdims=True)
     output[:] = exponent / sum
 
 
@@ -1155,7 +1150,8 @@ class PureGather(ONNXForward):
                                                   state,
                                                   node,
                                                   add_access_nodes=False)
-        out_shape = out_desc_with_name(node, state, sdfg, "output").shape
+        out_desc = out_desc_with_name(node, state, sdfg, "output")
+        out_shape = out_desc.shape
         idx_desc = in_desc_with_name(node, state, sdfg, "indices")
         idx_shape = idx_desc.shape
         data_shape = in_desc_with_name(node, state, sdfg, "data").shape
@@ -1206,6 +1202,77 @@ class PureGather(ONNXForward):
             code=f"__output = __data[idx]",
             outputs={"__output": dace.Memlet(output_idx_str)},
             external_edges=True)
+
+        # required to make underlying code to see it as a pointer and enable index-based access
+        # even if the data contains just a single element
+        tasklet.in_connectors["__data"] = dace.pointer(out_desc.dtype)
+
+        return nsdfg
+
+
+@python_pure_op_implementation
+def Equal(A, B, C):
+    C[:] = np.equal(A, B)
+
+
+@python_pure_op_implementation
+def Not(X, Y):
+    Y[:] = np.logical_not(X)
+
+
+@op_implementation(op="CumSum", name="pure")
+class PureCumSum(ONNXForward):
+    @staticmethod
+    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+                sdfg: SDFG) -> typing.Union[Node, SDFG]:
+
+        if node.exclusive or node.reverse:
+            raise NotImplementedError("CumSum with exclusive or reverse attributes is not implemented")
+
+        nsdfg, nstate, input_nodes, output_nodes = empty_sdfg_for_node(sdfg,
+                                                  state,
+                                                  node,
+                                                  add_access_nodes=True)
+
+        x_desc = in_desc_with_name(node, state, sdfg, "x")
+        axis_desc = in_desc_with_name(node, state, sdfg, "axis")
+        y_desc = out_desc_with_name(node, state, sdfg, "y")
+
+        x_idx_expr = " + ".join([f"i{i} * {s}" for i, s in enumerate(x_desc.strides)])
+        y_idx_expr = " + ".join([f"i{i} * {s}" for i, s in enumerate(y_desc.strides)])
+
+        num_dims = len(x_desc.shape)
+
+        y_prev_idx_expr = " + ".join([
+            f"(i{i} - is_axis{i}) * {s}"
+            for i, s in enumerate(y_desc.strides)
+        ])
+
+        code = ""
+        for i, val in enumerate(y_desc.shape):
+            code += f"for (int i{i} = 0; i{i} < {val}; i{i}++) {{\n"
+            code += f"int is_axis{i} = ({i} == ({num_dims} + __axis) % {num_dims});\n"
+        code += f"__y[{y_idx_expr}] = __x[{x_idx_expr}];\n"
+        code += f"if (" + ' || '.join([f"(i{i} > 0 && is_axis{i})" for i in range(num_dims)]) + ") {\n"
+        code += f"__y[{y_idx_expr}] += __y[{y_prev_idx_expr}];\n"
+        code += "}\n"
+        for _ in y_desc.shape:
+            code += "}\n"
+
+        tasklet = nstate.add_tasklet(
+            name=node.label + "_tasklet",
+            inputs={
+                "__x": dace.pointer(x_desc.dtype),
+                "__axis": axis_desc.dtype,
+            },
+            outputs={"__y": dace.pointer(y_desc.dtype)},
+            language=dace.Language.CPP,
+            code=code,
+        )
+
+        nstate.add_edge(input_nodes["x"], None, tasklet, "__x", dace.Memlet.from_array("x", x_desc))
+        nstate.add_edge(input_nodes["axis"], None, tasklet, "__axis", dace.Memlet.from_array("axis", axis_desc))
+        nstate.add_edge(tasklet, "__y", output_nodes["y"], None, dace.Memlet.from_array("y", y_desc))
 
         return nsdfg
 

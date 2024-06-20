@@ -830,10 +830,10 @@ class PureSum(ONNXForward):
 
 @python_pure_op_implementation(**softmax_compute)
 def LogSoftmax(input, output):
-    maximum = np.maximum.reduce(input, axis=axis, keepdims=keepdims)
+    maximum = np.maximum.reduce(input, axis=axis, keepdims=True)
     max_sub = input - maximum
     exponent = np.exp(max_sub)
-    sum = np.add.reduce(exponent, axis=axis, keepdims=keepdims)
+    sum = np.add.reduce(exponent, axis=axis, keepdims=True)
     log_sum = np.log(sum)
     output[:] = max_sub - log_sum
 

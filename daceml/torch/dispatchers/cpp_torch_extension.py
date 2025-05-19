@@ -7,6 +7,7 @@ import operator
 import os
 from typing import List, Tuple, Callable, Optional, Dict, Union
 
+import dace
 import dace.library
 import numpy as np
 import torch
@@ -510,15 +511,20 @@ def register_and_compile_torch_extension(module: 'daceml.torch.DaceModule',
                          targets.cpu.CPUCodeGen,
                          f"Torch{module.sdfg_name}",
                          environments=environments)
-    torch_module_build_path = os.path.join('.dacecache',
-                                           f"torch_{compiled.sdfg.name}")
+    torch_module_build_path = os.path.join('.dacecache', f"torch_{compiled.sdfg.name}")
 
     compiler.generate_program_folder(None, [program], torch_module_build_path)
-    compiler.configure_and_compile(torch_module_build_path)
 
-    torch.ops.load_library(
-        os.path.join(torch_module_build_path, "build",
-                     platform_library_name(libname)))
+    include_path = os.path.abspath(os.path.join('.dacecache', compiled.sdfg.name, "include"))
+    dace_include_path = os.path.abspath(os.path.join(os.path.dirname(dace.__file__), "runtime", "include"))
+    code_path = os.path.join('.dacecache', compiled.sdfg.name, "src", "cpu", f"{compiled.sdfg.name}.cpp")
+    torch_code_path = os.path.join('.dacecache', f"torch_{compiled.sdfg.name}", "src", "cpu", f"torch_{compiled.sdfg.name}.cpp")
+    torch.utils.cpp_extension.load(
+        name=libname,
+        sources=[code_path, torch_code_path],
+        extra_include_paths=[include_path, dace_include_path],
+        is_python_module=False,
+    )
 
     torch_function = operator.attrgetter(
         f"daceml_{compiled.sdfg.name}.{compiled.sdfg.name}")(torch.ops)

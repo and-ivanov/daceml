@@ -141,9 +141,9 @@ class ONNXParameterType(aenum.AutoNumberEnum):
 
 
 @onnx_representation(onnx.defs.OpSchema.FormalParameter,
-                     type_str='typeStr',
+                     type_str='type_str',
                      param_type='option',
-                     homogeneous="isHomogeneous")
+                     homogeneous="is_homogeneous")
 class ONNXParameter:
     """ Python representation of an ONNX parameter. """
 

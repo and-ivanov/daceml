@@ -438,7 +438,7 @@ def GlobalAveragePool(X, Y):
     Y[:] = np.mean(X, axis=[2, 3])
 
 
-@op_implementation(op="GlobalAveragePool", name="pure_opt")
+@op_implementation(op="GlobalAveragePool", name="pure")
 class PureGlobalAveragePool(ONNXForward):
     @staticmethod
     def forward_can_be_applied(node: ONNXOp, state: SDFGState,

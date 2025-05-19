@@ -712,7 +712,7 @@ for schema in _get_schemas_from_version(12):
     globals()[cls_name] = cls
     _ONNX_OPS_BY_NAME[cls_name] = cls
 
-del cls
+    del cls
 
 
 def has_onnx_node(name: str) -> bool:

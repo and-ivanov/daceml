@@ -149,6 +149,7 @@ class PureResize(ONNXForward):
         
         inp_name = 'X'
         scales_name = 'scales'
+        sizes_name = 'sizes'
         roi_name = 'roi'
         out_name = 'Y'
         
@@ -165,6 +166,10 @@ class PureResize(ONNXForward):
         scales_data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, scales_name))
         scales_data_desc.transient = False
         nsdfg.add_datadesc(scales_name, scales_data_desc)
+        
+        sizes_data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, sizes_name))
+        scales_data_desc.transient = False
+        nsdfg.add_datadesc(sizes_name, sizes_data_desc)
         
         roi_data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, roi_name))
         roi_data_desc.transient = False

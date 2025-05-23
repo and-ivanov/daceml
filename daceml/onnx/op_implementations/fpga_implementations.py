@@ -2939,7 +2939,18 @@ class FPGAReshape(ONNXForward):
         constant_folding.remove_node_and_computation(sdfg, state, shape_node)
 
         def prog(data, reshaped):
-            reshaped[:] = np.reshape(data, new_shape)
+            # Handle allowzero parameter
+            if hasattr(node, 'allowzero') and node.allowzero == 1:
+                # For allowzero=1, we need to handle zeros in the shape tensor
+                # This means we need to preserve the original dimension size when a zero is encountered
+                actual_shape = list(new_shape)
+                for i, dim in enumerate(actual_shape):
+                    if dim == 0:
+                        actual_shape[i] = data.shape[i]
+                reshaped[:] = np.reshape(data, actual_shape)
+            else:
+                # Default behavior (allowzero=0)
+                reshaped[:] = np.reshape(data, new_shape)
 
         return program_for_node(prog, sdfg, state, node)
 

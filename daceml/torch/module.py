@@ -276,7 +276,7 @@ class DaceModule(nn.Module, frontend_common.SDFGConvertible):
                 # that renames weights and thus breaks the model in some settings.
                 training=(TrainingMode.TRAINING
                           if self.training else TrainingMode.EVAL),
-                opset_version=12,
+                # opset_version=12,
                 export_params=not self.backward,
                 # pytorch constant folding will add new unnamed inputs to the graph and remove some of the
                 # named parameters of the model: this means that we can't match with the state dict

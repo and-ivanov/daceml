@@ -491,19 +491,15 @@ def register_op_repo_replacement(cls: Type[ONNXOp], cls_name: str,
         return []
 
 
-def _get_schemas_from_version(version: int):
+def _get_latest_schemas():
     name_to_schemas = collections.defaultdict(list)
     for schema in onnx.defs.get_all_schemas_with_history():
         name_to_schemas[schema.name].append(schema)
 
     all_schemas = []
     for name, schemas in name_to_schemas.items():
+        # Sort by version and take the latest one
         schemas = sorted(schemas, key=lambda x: x.since_version)
-        while schemas and schemas[-1].since_version > version:
-            schemas.pop()
-        if not schemas:  # what if we dropeed all?
-            continue
-
         all_schemas.append(schemas[-1])
 
     return all_schemas
@@ -511,7 +507,7 @@ def _get_schemas_from_version(version: int):
 
 _ONNX_OPS_BY_NAME = {}
 # Generate all of the Op Nodes
-for schema in _get_schemas_from_version(12):
+for schema in _get_latest_schemas():
     try:
         dace_schema = ONNXSchema.from_onnx_proto(schema)
         # if the schema has a parameter name that exists as both an input and an output, prepend "in_" and "out_"

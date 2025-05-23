@@ -755,9 +755,22 @@ def LeakyRelu(X, Y):
     Y[:] = dace.elementwise(cast_lambda, X)
 
 
-@python_pure_op_implementation(shape=lambda reshaped: reshaped.shape)
+@python_pure_op_implementation(
+    shape=lambda reshaped: reshaped.shape,
+    allowzero=lambda node: getattr(node, 'allowzero', 0))
 def Reshape(data, reshaped):
-    reshaped[:] = np.reshape(data, shape)
+    # If allowzero is 0 (default), we use numpy's reshape which doesn't allow zeros
+    # If allowzero is 1, we need to handle zeros in the shape tensor
+    if allowzero == 0:
+        reshaped[:] = np.reshape(data, shape)
+    else:
+        # For allowzero=1, we need to handle zeros in the shape tensor
+        # This means we need to preserve the original dimension size when a zero is encountered
+        new_shape = list(shape)
+        for i, dim in enumerate(new_shape):
+            if dim == 0:
+                new_shape[i] = data.shape[i]
+        reshaped[:] = np.reshape(data, new_shape)
 
 
 @python_pure_op_implementation(
@@ -930,39 +943,126 @@ def Sigmoid(X, Y):
     Y[:] = dace.elementwise(lambda x: dtype(1) / (dtype(1) + exp(-x)), X)
 
 
-# @op_implementation(op="Einsum", name="pure")
-# class EinsumPure(ONNXForward):
-#     @staticmethod
-#     def forward(node: onnx_op.ONNXOp, state: SDFGState,
-#                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
-#         perm = node.perm
-#         input_desc = in_desc_with_name(node, state, sdfg, "data")
-#         output_desc = out_desc_with_name(node, state, sdfg, "transposed")
+@op_implementation(op="LayerNormalization", name="pure")
+class PureLayerNormalization(ONNXForward):
+    @staticmethod
+    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+                               sdfg: SDFG) -> bool:
+        return True
 
-#         letters = [chr(ord('z') - i) for i in range(26)]
-#         input_letters = "".join(letters[i]
-#                                 for i, _ in enumerate(input_desc.shape))
-#         output_letters = "".join(letters[i] for i in perm)
-#         equation_str = f"{input_letters}->{output_letters}"
+    @staticmethod
+    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+                sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        # Create new SDFG
+        nsdfg = dace.SDFG(node.label + "_expansion")
+        nstate = nsdfg.add_state()
 
-#         nsdfg = dace.SDFG(node.label + "_expansion")
-#         nstate = nsdfg.add_state()
-#         einsum_node: nodes.LibraryNode = onnx_op.ONNXEinsum(
-#             node.label + "_einsum_expansion", equation=equation_str)
+        # Get input/output descriptors
+        X_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "X"))
+        scale_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "Scale"))
+        B_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "B"))
+        Y_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "Y"))
 
-#         nstate.add_node(einsum_node)
-#         einsum_node.add_in_connector("Inputs__0")
-#         nsdfg.add_datadesc("data", copy.deepcopy(input_desc))
-#         nsdfg.add_datadesc("transposed", copy.deepcopy(output_desc))
-#         nsdfg.arrays["data"].transient = False
-#         nsdfg.arrays["transposed"].transient = False
+        # Add data descriptors to SDFG
+        nsdfg.add_datadesc("X", X_desc)
+        nsdfg.add_datadesc("Scale", scale_desc)
+        nsdfg.add_datadesc("B", B_desc)
+        nsdfg.add_datadesc("Y", Y_desc)
+        nsdfg.arrays["X"].transient = False
+        nsdfg.arrays["Scale"].transient = False
+        nsdfg.arrays["B"].transient = False
+        nsdfg.arrays["Y"].transient = False
 
-#         nstate.add_edge(nstate.add_read("data"), None, einsum_node,
-#                         "Inputs__0", nsdfg.make_array_memlet("data"))
-#         nstate.add_edge(einsum_node, "Output", nstate.add_write("transposed"),
-#                         None, nsdfg.make_array_memlet("transposed"))
+        # Add access nodes
+        X_read = nstate.add_read("X")
+        scale_read = nstate.add_read("Scale")
+        B_read = nstate.add_read("B")
+        Y_write = nstate.add_write("Y")
 
-#         return nsdfg
+        # Check if optional outputs exist
+        has_mean = len(list(state.out_edges_by_connector(node, "Mean"))) > 0
+        has_inv_std_dev = len(list(state.out_edges_by_connector(node, "InvStdDev"))) > 0
+        mean_write = None
+        inv_std_dev_write = None
+
+        if has_mean:
+            mean_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "Mean"))
+            nsdfg.add_datadesc("Mean", mean_desc)
+            nsdfg.arrays["Mean"].transient = False
+            mean_write = nstate.add_write("Mean")
+
+        if has_inv_std_dev:
+            inv_std_dev_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "InvStdDev"))
+            nsdfg.add_datadesc("InvStdDev", inv_std_dev_desc)
+            nsdfg.arrays["InvStdDev"].transient = False
+            inv_std_dev_write = nstate.add_write("InvStdDev")
+
+        # Create tasklet that performs the layer normalization
+        tasklet_inputs = {
+            "__X": dace.pointer(X_desc.dtype),
+            "__Scale": dace.pointer(scale_desc.dtype),
+            "__B": dace.pointer(B_desc.dtype),
+        }
+        tasklet_outputs = {
+            "__Y": dace.pointer(Y_desc.dtype),
+        }
+        if has_mean:
+            tasklet_outputs["__Mean"] = dace.pointer(mean_desc.dtype)
+        if has_inv_std_dev:
+            tasklet_outputs["__InvStdDev"] = dace.pointer(inv_std_dev_desc.dtype)
+
+        # Compute X_size from data descriptor
+        x_size = int(np.prod(X_desc.shape))
+        tasklet = nstate.add_tasklet(
+            name=node.label + "_tasklet",
+            inputs=tasklet_inputs,
+            outputs=tasklet_outputs,
+            code=f"""
+            // Calculate mean
+            double sum = 0.0;
+            for (int i = 0; i < {x_size}; i++) {{
+                sum += __X[i];
+            }}
+            double mean = sum / {x_size};
+            """ + ("""
+            __Mean[0] = mean;
+            """ if has_mean else "") + f"""
+            // Calculate variance and standard deviation
+            double sq_sum = 0.0;
+            for (int i = 0; i < {x_size}; i++) {{
+                double diff = __X[i] - mean;
+                sq_sum += diff * diff;
+            }}
+            double variance = sq_sum / {x_size};
+            double inv_std_dev = 1.0 / sqrt(variance + 1e-5);  // epsilon = 1e-5
+            """ + ("""
+            __InvStdDev[0] = inv_std_dev;
+            """ if has_inv_std_dev else "") + f"""
+            // Normalize and apply scale and bias
+            for (int i = 0; i < {x_size}; i++) {{
+                __Y[i] = (__X[i] - mean) * inv_std_dev * __Scale[i] + __B[i];
+            }}
+            """,
+            language=dace.Language.CPP
+        )
+
+        # Connect the tasklet with memlets
+        nstate.add_edge(X_read, None, tasklet, "__X", 
+                       dace.Memlet.from_array("X", X_desc))
+        nstate.add_edge(scale_read, None, tasklet, "__Scale",
+                       dace.Memlet.from_array("Scale", scale_desc))
+        nstate.add_edge(B_read, None, tasklet, "__B",
+                       dace.Memlet.from_array("B", B_desc))
+        nstate.add_edge(tasklet, "__Y", Y_write, None,
+                       dace.Memlet.from_array("Y", Y_desc))
+        if has_mean:
+            nstate.add_edge(tasklet, "__Mean", mean_write, None,
+                           dace.Memlet.from_array("Mean", mean_desc))
+        if has_inv_std_dev:
+            nstate.add_edge(tasklet, "__InvStdDev", inv_std_dev_write, None,
+                           dace.Memlet.from_array("InvStdDev", inv_std_dev_desc))
+
+        return nsdfg
 
 
 @op_implementation(op="Split", name="pure")
@@ -1282,14 +1382,121 @@ class PureCumSum(ONNXForward):
         return nsdfg
 
 
-def insert_at_indices(v, xs, idx):
-    xs = list(copy.deepcopy(xs))
-    for i in idx:
-        xs.insert(i, v)
-    return xs
+@op_implementation(op="Unsqueeze", name="pure")
+class PureUnsqueeze(ONNXForward):
+    @staticmethod
+    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+                               sdfg: SDFG) -> bool:
+        return True
+
+    @staticmethod
+    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+                sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        # Create new SDFG
+        nsdfg = dace.SDFG(node.label + "_expansion")
+        nstate = nsdfg.add_state()
+
+        # Get input/output descriptors
+        data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "data"))
+        axes_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "axes"))
+        expanded_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "expanded"))
+
+        # Add data descriptors to SDFG
+        nsdfg.add_datadesc("data", data_desc)
+        nsdfg.add_datadesc("axes", axes_desc)
+        nsdfg.add_datadesc("expanded", expanded_desc)
+        nsdfg.arrays["data"].transient = False
+        nsdfg.arrays["axes"].transient = False
+        nsdfg.arrays["expanded"].transient = False
+
+        # Add access nodes
+        data_read = nstate.add_read("data")
+        axes_read = nstate.add_read("axes")
+        expanded_write = nstate.add_write("expanded")
+
+        # Create tasklet that performs the unsqueeze operation
+        data_size = int(np.prod(data_desc.shape))
+        tasklet = nstate.add_tasklet(
+            name=node.label + "_tasklet",
+            inputs={
+                "__data": dace.pointer(data_desc.dtype),
+                "__axes": dace.pointer(axes_desc.dtype),
+            },
+            outputs={"__expanded": dace.pointer(expanded_desc.dtype)},
+            code=f"""
+            for (int i = 0; i < {data_size}; i++) {{
+                __expanded[i] = __data[i];
+            }}
+            """,
+            language=dace.Language.CPP
+        )
+
+        # Connect the tasklet with memlets
+        nstate.add_edge(data_read, None, tasklet, "__data", 
+                       dace.Memlet.from_array("data", data_desc))
+        nstate.add_edge(axes_read, None, tasklet, "__axes",
+                       dace.Memlet.from_array("axes", axes_desc))
+        nstate.add_edge(tasklet, "__expanded", expanded_write, None,
+                       dace.Memlet.from_array("expanded", expanded_desc))
+
+        return nsdfg
 
 
-@python_pure_op_implementation(
-    shape=lambda node, data: insert_at_indices(1, data.shape, node.axes))
-def Unsqueeze(data, expanded):
-    expanded[:] = np.reshape(data, shape)
+@op_implementation(op="Squeeze", name="pure")
+class PureSqueeze(ONNXForward):
+    @staticmethod
+    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+                               sdfg: SDFG) -> bool:
+        return True
+
+    @staticmethod
+    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+                sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        # Create new SDFG
+        nsdfg = dace.SDFG(node.label + "_expansion")
+        nstate = nsdfg.add_state()
+
+        # Get input/output descriptors
+        data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "data"))
+        axes_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "axes"))
+        squeezed_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "squeezed"))
+
+        # Add data descriptors to SDFG
+        nsdfg.add_datadesc("data", data_desc)
+        nsdfg.add_datadesc("axes", axes_desc)
+        nsdfg.add_datadesc("squeezed", squeezed_desc)
+        nsdfg.arrays["data"].transient = False
+        nsdfg.arrays["axes"].transient = False
+        nsdfg.arrays["squeezed"].transient = False
+
+        # Add access nodes
+        data_read = nstate.add_read("data")
+        axes_read = nstate.add_read("axes")
+        squeezed_write = nstate.add_write("squeezed")
+
+        # Create tasklet that performs the squeeze operation
+        data_size = int(np.prod(data_desc.shape))
+        tasklet = nstate.add_tasklet(
+            name=node.label + "_tasklet",
+            inputs={
+                "__data": dace.pointer(data_desc.dtype),
+                "__axes": dace.pointer(axes_desc.dtype),
+            },
+            outputs={"__squeezed": dace.pointer(squeezed_desc.dtype)},
+            code=f"""
+            for (int i = 0; i < {data_size}; i++) {{
+                __squeezed[i] = __data[i];
+            }}
+            """,
+            language=dace.Language.CPP
+        )
+
+        # Connect the tasklet with memlets
+        nstate.add_edge(data_read, None, tasklet, "__data", 
+                       dace.Memlet.from_array("data", data_desc))
+        nstate.add_edge(axes_read, None, tasklet, "__axes",
+                       dace.Memlet.from_array("axes", axes_desc))
+        nstate.add_edge(tasklet, "__squeezed", squeezed_write, None,
+                       dace.Memlet.from_array("squeezed", squeezed_desc))
+
+        return nsdfg

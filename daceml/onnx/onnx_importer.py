@@ -132,18 +132,13 @@ class ONNXModel:
         :param auto_merge: whether to automatically merge symbolic shapes in symbolic shape inference.    
         """
 
-        for opset in model.opset_import:
-            if opset.domain == "" and opset.version != 12:
-                log.warning(
-                    f"Expected the onnx model to be exported with opset 12, got {opset.version}. This model may fail "
-                    f"to import as a result.")
-
         onnx.checker.check_model(model)
+        onnx.save(model, 'model_original.onnx')
         model = shape_inference.infer_shapes(model, auto_merge=auto_merge)
-        # onnx.save(model, 'model_original.onnx')
+        onnx.save(model, 'model_original_with_shapes.onnx')
         if onnx_simplify:
             model = simplify_onnx_model(model, auto_merge)
-            # onnx.save(model, 'model_simplified.onnx')
+            onnx.save(model, 'model_simplified.onnx')
 
         self.do_auto_optimize = auto_optimize
 

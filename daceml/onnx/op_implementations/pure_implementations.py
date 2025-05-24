@@ -997,6 +997,11 @@ class PureLayerNormalization(ONNXForward):
             nsdfg.arrays["InvStdDev"].transient = False
             inv_std_dev_write = nstate.add_write("InvStdDev")
 
+        # Get axis and epsilon
+        axis = node.axis if hasattr(node, 'axis') else -1
+        epsilon = node.epsilon if hasattr(node, 'epsilon') else 1e-5
+        stash_type = node.stash_type if hasattr(node, 'stash_type') else 1
+
         # Create tasklet that performs the layer normalization
         tasklet_inputs = {
             "__X": dace.pointer(X_desc.dtype),
@@ -1011,38 +1016,80 @@ class PureLayerNormalization(ONNXForward):
         if has_inv_std_dev:
             tasklet_outputs["__InvStdDev"] = dace.pointer(inv_std_dev_desc.dtype)
 
-        # Compute X_size from data descriptor
-        x_size = int(np.prod(X_desc.shape))
+        # Generate code for multi-dimensional normalization
+        rank = len(X_desc.shape)
+        if axis < 0:
+            axis = rank + axis
+
+        # Generate map ranges for the outer dimensions (before axis)
+        outer_map_ranges = {f"i{i}": f"0:{X_desc.shape[i]}" for i in range(axis)}
+        
+        # Generate map ranges for the inner dimensions (axis and after)
+        inner_map_ranges = {f"i{i}": f"0:{X_desc.shape[i]}" for i in range(axis, rank)}
+        
+        # Calculate size of normalization dimensions
+        norm_size = int(np.prod([X_desc.shape[i] for i in range(axis, rank)]))
+        
+        # Determine computation type based on stash_type
+        compute_type = "dace::" + ("float32" if stash_type == 1 else X_desc.dtype.to_string())
+        
+        # Generate code for the tasklet
+        code = f"""
+        // Outer loop over dimensions before axis
+        {chr(10).join([f'for (int i{i} = 0; i{i} < {X_desc.shape[i]}; i{i}++) {{' for i in range(axis)])}
+        
+        // Calculate mean over normalization dimensions
+        {compute_type} sum = 0.0;
+        {chr(10).join([f'for (int i{i} = 0; i{i} < {X_desc.shape[i]}; i{i}++) {{' for i in range(axis, rank)])}
+            sum += __X[{'+'.join([f'i{i} * {X_desc.strides[i]}' for i in range(rank)])}];
+        {chr(10).join(['}' for _ in range(axis, rank)])}
+        {compute_type} mean = sum / {norm_size};
+        """
+        
+        if has_mean:
+            code += f"""
+            // Store mean
+            __Mean[{'+'.join([f'i{i} * {mean_desc.strides[i]}' for i in range(axis)])}] = mean;
+            """
+            
+        code += f"""
+        // Calculate variance
+        {compute_type} sq_sum = 0.0;
+        {chr(10).join([f'for (int i{i} = 0; i{i} < {X_desc.shape[i]}; i{i}++) {{' for i in range(axis, rank)])}
+            {compute_type} diff = __X[{'+'.join([f'i{i} * {X_desc.strides[i]}' for i in range(rank)])}] - mean;
+            sq_sum += diff * diff;
+        {chr(10).join(['}' for _ in range(axis, rank)])}
+        {compute_type} variance = sq_sum / {norm_size};
+        {compute_type} inv_std_dev = 1.0 / sqrt(variance + {epsilon});
+        """
+        
+        if has_inv_std_dev:
+            code += f"""
+            // Store inverse standard deviation
+            __InvStdDev[{'+'.join([f'i{i} * {inv_std_dev_desc.strides[i]}' for i in range(axis)])}] = inv_std_dev;
+            """
+            
+        code += f"""
+        // Normalize and apply scale and bias
+        {chr(10).join([f'for (int i{i} = 0; i{i} < {X_desc.shape[i]}; i{i}++) {{' for i in range(axis, rank)])}
+            int x_idx = {'+'.join([f'i{i} * {X_desc.strides[i]}' for i in range(rank)])};
+            int y_idx = {'+'.join([f'i{i} * {Y_desc.strides[i]}' for i in range(rank)])};
+            // Scale and B only have dimensions for normalization axes
+            int scale_idx = {'+'.join([f'i{i + axis} * {scale_desc.strides[i]}' for i in range(len(scale_desc.shape))])};
+            int b_idx = {'+'.join([f'i{i + axis} * {B_desc.strides[i]}' for i in range(len(B_desc.shape))])};
+            // Compute normalized value in the computation type
+            {compute_type} normalized = (__X[x_idx] - mean) * inv_std_dev;
+            // Cast final result back to output type
+            __Y[y_idx] = normalized * __Scale[scale_idx] + __B[b_idx];
+        {chr(10).join(['}' for _ in range(axis, rank)])}
+        {chr(10).join(['}' for _ in range(axis)])}
+        """
+
         tasklet = nstate.add_tasklet(
             name=node.label + "_tasklet",
             inputs=tasklet_inputs,
             outputs=tasklet_outputs,
-            code=f"""
-            // Calculate mean
-            double sum = 0.0;
-            for (int i = 0; i < {x_size}; i++) {{
-                sum += __X[i];
-            }}
-            double mean = sum / {x_size};
-            """ + ("""
-            __Mean[0] = mean;
-            """ if has_mean else "") + f"""
-            // Calculate variance and standard deviation
-            double sq_sum = 0.0;
-            for (int i = 0; i < {x_size}; i++) {{
-                double diff = __X[i] - mean;
-                sq_sum += diff * diff;
-            }}
-            double variance = sq_sum / {x_size};
-            double inv_std_dev = 1.0 / sqrt(variance + 1e-5);  // epsilon = 1e-5
-            """ + ("""
-            __InvStdDev[0] = inv_std_dev;
-            """ if has_inv_std_dev else "") + f"""
-            // Normalize and apply scale and bias
-            for (int i = 0; i < {x_size}; i++) {{
-                __Y[i] = (__X[i] - mean) * inv_std_dev * __Scale[i] + __B[i];
-            }}
-            """,
+            code=code,
             language=dace.Language.CPP
         )
 

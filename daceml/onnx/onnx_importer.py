@@ -141,7 +141,7 @@ class ONNXModel:
             onnx.save(model, 'model_simplified.onnx')
 
         self.do_auto_optimize = auto_optimize
-
+        self.model = model
         graph: onnx.GraphProto = model.graph
         self.save_transients = save_transients
         self.sdfg: SDFG = SDFG(name)  #: the generated SDFG.
@@ -244,24 +244,13 @@ class ONNXModel:
             for param_idx, (name, is_input) in chain(
                     enumerate(zip(node.input, repeat(True))),
                     enumerate(zip(node.output, repeat(False)))):
-                if clean_onnx_name(name) not in self.sdfg.arrays:
-                    if name not in self.value_infos:
-                        raise ValueError(
-                            "Could not find array with name '{}'".format(name))
-                    self._add_value_info(self.value_infos[name])
-                # get the access node
-                if name in access_nodes:
-                    access = access_nodes[name]
-                else:
-                    access = nodes.AccessNode(clean_onnx_name(name))
-                    self.state.add_node(access)
-                    access_nodes[name] = access
-
-                # get the connector name
+                # Get parameter schema
                 params = op_node.schema.inputs if is_input else op_node.schema.outputs
                 params_len = len(params)
+                
+                # Determine parameter type and validate
                 if param_idx >= params_len:
-                    # this is a variadic parameter. Then the last parameter of the parameter must be variadic.
+                    # Variadic parameter beyond schema range
                     if params[-1].param_type != ONNXParameterType.Variadic:
                         raise ValueError(
                             "Expected the last {i_or_o} parameter to be variadic,"
@@ -269,34 +258,56 @@ class ONNXModel:
                             .format(i_or_o="input" if is_input else "output",
                                     param_idx=param_idx,
                                     params_len=params_len))
-                    conn_name = params[-1].name + "__" + str(param_idx -
-                                                             params_len + 1)
-                elif params[
-                        param_idx].param_type == ONNXParameterType.Variadic:
-                    # this is a variadic parameter, and it is within the range of params, so it must be the first
-                    # instance of a variadic parameter
-                    conn_name = params[param_idx].name + "__0"
+                    param_type = ONNXParameterType.Variadic
+                    conn_name = params[-1].name + "__" + str(param_idx - params_len + 1)
                 else:
-                    conn_name = params[param_idx].name
+                    param_type = params[param_idx].param_type
+                    if param_type == ONNXParameterType.Variadic:
+                        conn_name = params[param_idx].name + "__0"
+                    else:
+                        conn_name = params[param_idx].name
+
+                # Handle optional parameters
+                if param_type == ONNXParameterType.Optional and not name:
+                    continue
+                
+                # Validate required parameters
+                if param_type != ONNXParameterType.Optional and not name:
+                    raise ValueError(
+                        "Required {i_or_o} parameter '{param_name}' is not set"
+                        .format(i_or_o="input" if is_input else "output",
+                                param_name=params[param_idx].name))
+
+                # Create array if needed
+                if clean_onnx_name(name) not in self.sdfg.arrays:
+                    if name not in self.value_infos:
+                        raise ValueError(
+                            "Could not find array with name '{}'".format(name))
+                    self._add_value_info(self.value_infos[name])
+
+                # Get or create access node
+                if name in access_nodes:
+                    access = access_nodes[name]
+                else:
+                    access = nodes.AccessNode(clean_onnx_name(name))
+                    self.state.add_node(access)
+                    access_nodes[name] = access
 
                 data_desc = self.sdfg.arrays[clean_onnx_name(name)]
 
-                # add the connector if required, and add an edge
+                # Add connector and edge
                 if is_input:
                     if conn_name not in op_node.in_connectors:
                         assert op_node.add_in_connector(conn_name)
                     self.state.add_edge(
                         access, None, op_node, conn_name,
-                        dace.Memlet.from_array(clean_onnx_name(name),
-                                               data_desc))
+                        dace.Memlet.from_array(clean_onnx_name(name), data_desc))
                 else:
                     if conn_name not in op_node.out_connectors:
                         assert op_node.add_out_connector(conn_name)
-
                     self.state.add_edge(
                         op_node, conn_name, access, None,
-                        dace.Memlet.from_array(clean_onnx_name(name),
-                                               data_desc))
+                        dace.Memlet.from_array(clean_onnx_name(name), data_desc))
 
         # scalars need to be promoted to arrays so that we can return them from the dace program
         # however, this is only for CPU: on GPU, scalars are already pointers

@@ -365,12 +365,25 @@ class SymbolicShapeInference:
             for i, name in enumerate(node.input):
                 value = self._try_get_value(node, i)
                 if value is not None:
-                    if isinstance(value, list):
-                        # Get the type from the original graph's value info
-                        input_type = self.known_vi_[name].type.tensor_type.elem_type
-                        # Convert ONNX type to numpy dtype
-                        dtype = get_numpy_dtype_from_onnx_tensor_type(input_type)
+                    # Get the type from the original graph's value info
+                    input_type = self.known_vi_[name].type.tensor_type.elem_type
+                    dtype = get_numpy_dtype_from_onnx_tensor_type(input_type)
+                    
+                    # Convert value to numpy array with proper dtype and shape
+                    if hasattr(value, 'is_number') and value.is_number:
+                        value = int(value) if value.is_integer else float(value)
+                    
+                    # Ensure value is a numpy array with correct shape
+                    if not isinstance(value, np.ndarray):
                         value = np.array(value, dtype=dtype)
+                    elif value.dtype != dtype:
+                        value = value.astype(dtype)
+                    
+                    # Ensure the shape matches the input shape
+                    input_shape = get_shape_from_type_proto(self.known_vi_[name].type)
+                    if input_shape and value.shape != tuple(input_shape):
+                        value = value.reshape(input_shape)
+                    
                     initializers.append(numpy_helper.from_array(value, name=name))
             tmp_graph = helper.make_graph(
                 [node], # list of nodes
@@ -437,8 +450,17 @@ class SymbolicShapeInference:
         self.symbolic_dims_.update(new_dims)
         return symbolic_shape_inference
 
-    def _get_int_values(self, node, broadcast=False):
-        values = [self._try_get_value(node, i) for i in range(len(node.input))]
+    def _get_int_values(self, node, broadcast=False, input_idx=None):
+        """Get integer values from node inputs.
+        
+        Args:
+            node: The ONNX node
+            broadcast: Whether to broadcast values to same length
+            input_idx: If specified, only process these input indices. Otherwise process all inputs.
+        """
+        if input_idx is None:
+            input_idx = list(range(len(node.input)))
+        values = [self._try_get_value(node, i) for i in input_idx]
         if all([v is not None for v in values]):
             # some shape compute is in floating point, cast to int for sympy
             for i, v in enumerate(values):
@@ -468,10 +490,16 @@ class SymbolicShapeInference:
                     values[i] = [v] * max_len
         return values
 
-    def _compute_on_sympy_data(self, node, op_func):
+    def _compute_on_sympy_data(self, node, op_func, input_indices=None):
         assert len(node.output) == 1
-        values = self._get_int_values(node, broadcast=True)
+        # Get values only for the specified inputs
+        values = self._get_int_values(node, broadcast=True, input_idx=input_indices)
+        # values is a list of values for each input.
+        # Each value can be either a list of values (tensor), a single scalar value, or None.
+        # For each input, we symbolically compute the output value using op_func that takes scalar values.
         if all([v is not None for v in values]):
+            # we propagate the value only if all inputs are known
+            
             is_list = [type(v) == list for v in values]
             as_list = any(is_list)
             if as_list:
@@ -480,16 +508,14 @@ class SymbolicShapeInference:
                 self.sympy_data_[node.output[0]] = op_func(values)
 
     def _pass_on_sympy_data(self, node):
-        # assert len(node.input) == 1 or node.op_type == 'Reshape'
-        self._compute_on_sympy_data(node, lambda x: x[0])
+        # this method attempts to propagate the value stored in the first input unchanged to output
+        self._compute_on_sympy_data(node, lambda x: x[0], input_indices=[0])
 
     def _pass_on_shape_and_type(self, node):
-        assert "/self_attn/Unsqueeze_output_0" not in self.known_vi_
         vi = self.known_vi_[node.output[0]]
         vi.CopyFrom(
             helper.make_tensor_value_info(node.output[0], self.known_vi_[node.input[0]].type.tensor_type.elem_type,
                                           self._get_shape(node, 0)))
-        assert "/self_attn/Unsqueeze_output_0" not in self.known_vi_
 
     def _new_symbolic_dim(self, prefix, dim):
         new_dim = '{}_d{}'.format(prefix, dim)
@@ -977,7 +1003,7 @@ class SymbolicShapeInference:
         axes = get_attribute(node, 'axes')
         keep_dims = get_attribute(node, 'keepdims')
         if keep_dims == 0 and axes == [0]:
-            data = self._get_int_values(node)[0]
+            data = self._get_int_values(node, input_idx=[0])[0]
             if data is not None:
                 self.sympy_data_[node.output[0]] = sympy_reduce_product(data)
 
@@ -1218,13 +1244,48 @@ class SymbolicShapeInference:
     def _infer_Split_Common(self, node, make_value_info_func):
         input_sympy_shape = self._get_sympy_shape(node, 0)
         axis = handle_negative_axis(get_attribute(node, 'axis', 0), len(input_sympy_shape))
-        split = get_attribute(node, 'split')
-        if not split:
-            num_outputs = len(node.output)
-            split = [input_sympy_shape[axis] / sympy.Integer(num_outputs)] * num_outputs
-            self._update_computed_dims(split)
+        
+        # Get opset version
+        opset = get_opset(self.out_mp_)
+        
+        # Handle different opset versions
+        if opset <= 11:
+            # Opset 11: split is an attribute
+            split = get_attribute(node, 'split')
+            if split:
+                split = [sympy.Integer(s) for s in split]
+            else:
+                # If no split attribute, divide equally
+                num_outputs = len(node.output)
+                split = [input_sympy_shape[axis] / sympy.Integer(num_outputs)] * num_outputs
         else:
-            split = [sympy.Integer(s) for s in split]
+            # Opset 13+: split is an input
+            split = None
+            if len(node.input) > 1:
+                split_value = self._try_get_value(node, 1)
+                if split_value is not None:
+                    split = [sympy.Integer(s) for s in split_value]
+                else:
+                    # Split input is present but value is unknown - create symbolic dimensions
+                    num_outputs = len(node.output)
+                    split = [self._new_symbolic_dim_from_output(node, i_o) for i_o in range(num_outputs)]
+            
+            if not split:
+                if opset >= 18:
+                    # Opset 18+: Check num_outputs attribute
+                    num_outputs = get_attribute(node, 'num_outputs')
+                    if num_outputs:
+                        split = [input_sympy_shape[axis] / sympy.Integer(num_outputs)] * num_outputs
+                    else:
+                        # If neither split nor num_outputs specified, divide equally
+                        num_outputs = len(node.output)
+                        split = [input_sympy_shape[axis] / sympy.Integer(num_outputs)] * num_outputs
+                else:
+                    # Opset 13-17: If no split input, divide equally
+                    num_outputs = len(node.output)
+                    split = [input_sympy_shape[axis] / sympy.Integer(num_outputs)] * num_outputs
+
+        self._update_computed_dims(split)
 
         for i_o in range(len(split)):
             vi = self.known_vi_[node.output[i_o]]

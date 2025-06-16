@@ -38,11 +38,11 @@ setup(
     package_data={'': (['*.cpp'] + runtime_files)},
     install_requires=[
         'dace',
-        'onnx==1.7.0',  # we support opset v12
+        'onnx',
         'torch',
-        'protobuf<3.21',
+        'protobuf',
         'dataclasses',
-        'onnx-simplifier'
+        'onnxsim'
     ],
     # install with pip and --find-links (see Makefile)
     # See https://github.com/pypa/pip/issues/5898

@@ -11,13 +11,13 @@ from dace.sdfg.nodes import Node
 
 from daceml.onnx import converters
 from daceml.onnx.forward_implementation_abc import ONNXForward
-from daceml.onnx.nodes import onnx_op
 from daceml.onnx.op_implementations.utils import op_implementation, program_for_node, empty_sdfg_for_node, \
     python_pure_op_implementation
-from daceml.transformation import constant_folding
-from daceml.transformation.replacement import onnx_constant_or_none
 from daceml.util.utils import in_desc_with_name, out_desc_with_name, in_edge_with_name, iterables_equal, prod
 
+if typing.TYPE_CHECKING:
+    from daceml.onnx.nodes.onnx_op import ONNXOp
+    
 log = logging.getLogger(__name__)
 
 
@@ -44,12 +44,12 @@ def Pow(X, Y, Z):
 @op_implementation(op="Concat", name="pure")
 class PureConcat(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
     
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         axis = node.axis
         
@@ -124,7 +124,7 @@ class PureConcat(ONNXForward):
 @op_implementation(op="Resize", name="pure")
 class PureResize(ONNXForward):    
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         # Check if we have either scales or sizes (but not both)
         has_scales = len(list(state.in_edges_by_connector(node, 'scales'))) > 0
@@ -227,7 +227,7 @@ class PureResize(ONNXForward):
         return True
     
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         
         inp_name = 'X'
@@ -555,20 +555,22 @@ class PureResize(ONNXForward):
 @op_implementation(op="Clip", name="pure")
 class PureClip(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         min_node = next(state.in_edges_by_connector(node, 'min')).src
         max_node = next(state.in_edges_by_connector(node, 'max')).src
+        from daceml.transformation.replacement import onnx_constant_or_none
         # TODO other cases
         return (onnx_constant_or_none(sdfg, min_node) is not None
                 and onnx_constant_or_none(sdfg, max_node) is not None)
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         min_node = next(state.in_edges_by_connector(node, 'min')).src
         max_node = next(state.in_edges_by_connector(node, 'max')).src
+        from daceml.transformation.replacement import onnx_constant_or_none
         minval = onnx_constant_or_none(sdfg, min_node)
         maxval = onnx_constant_or_none(sdfg, max_node)
 
@@ -622,7 +624,7 @@ def Erf(input, output):
 @op_implementation(op="MatMul", name="pure")
 class PureMatMul(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         input0_dim = len(in_desc_with_name(node, state, sdfg, "A").shape)
         input1_dim = len(in_desc_with_name(node, state, sdfg, "B").shape)
@@ -632,7 +634,7 @@ class PureMatMul(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         A_desc = in_desc_with_name(node, state, sdfg, "A")
         B_desc = in_desc_with_name(node, state, sdfg, "B")
@@ -704,7 +706,8 @@ class PureMatMul(ONNXForward):
         # we lower to an ONNXEinsum node instead straight to the dace einsum to make the autodiff simpler
         nsdfg = dace.SDFG(node.label + "_expansion")
         nstate = nsdfg.add_state()
-        einsum_node: nodes.LibraryNode = onnx_op.ONNXEinsum(
+        from daceml.onnx.nodes.onnx_op_registry import ONNXEinsum
+        einsum_node: ONNXOp = ONNXEinsum(
             node.label + "_einsum_expansion", equation=einsum_str)
 
         nstate.add_node(einsum_node)
@@ -730,14 +733,14 @@ class PureMatMul(ONNXForward):
 @op_implementation(op="Einsum", name="pure")
 class PureEinsum(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         if "..." in node.equation:
             return False
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         nsdfg = dace.SDFG(node.label + "_expansion")
         nstate = nsdfg.add_state()
@@ -772,15 +775,16 @@ def Identity(input, output):
 class PureExpand(ONNXForward):
     """ Handle no-op case for Expand """
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return iterables_equal(
             in_desc_with_name(node, state, sdfg, "input").shape,
             out_desc_with_name(node, state, sdfg, "output").shape)
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        from daceml.transformation import constant_folding
 
         constant_folding.remove_node_and_computation(sdfg, state, node,
                                                      "shape")
@@ -839,7 +843,7 @@ def Transpose(data, transposed):
 @op_implementation(op="Cast", name="pure")
 class PureCast(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
 
         if (in_desc_with_name(node, state, sdfg,
@@ -856,7 +860,7 @@ class PureCast(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         input_desc = in_desc_with_name(node, state, sdfg, "input")
         output_desc = out_desc_with_name(node, state, sdfg, "output")
@@ -890,12 +894,12 @@ class PureCast(ONNXForward):
 @op_implementation(op="Gemm", name="pure")
 class PureGemm(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         A_desc = in_desc_with_name(node, state, sdfg, "A")
         B_desc = in_desc_with_name(node, state, sdfg, "B")
@@ -975,7 +979,8 @@ class PureGemm(ONNXForward):
         nstate = nsdfg.add_state()
 
         # Einsum: "A", "B" -> mm_result
-        einsum_node: nodes.LibraryNode = onnx_op.ONNXEinsum(
+        from daceml.onnx.nodes.onnx_op_registry import ONNXEinsum
+        einsum_node: ONNXOp = ONNXEinsum(
             node.label + "_einsum_expansion", equation=einsum_str)
 
         nstate.add_node(einsum_node)
@@ -1107,7 +1112,7 @@ def Flatten(input, output):
 @op_implementation(op="Sum", name="pure")
 class PureSum(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         # check that all shapes are arrays, and that the shapes are all equal
         shape = None
@@ -1127,7 +1132,7 @@ class PureSum(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         nsdfg = dace.SDFG(node.name)
@@ -1185,7 +1190,7 @@ class PureSlice(ONNXForward):
         Slice expansion
     '''
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         # check that all the inputs (even the optional ones) are present and constant
 
@@ -1235,7 +1240,7 @@ class PureSlice(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         start = sdfg._parent_onnx_model.clean_weights[in_edge_with_name(
@@ -1264,12 +1269,12 @@ def Softplus(X, Y):
 @op_implementation(op="Sigmoid", name="pure")
 class PureSigmoid(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         # Create new SDFG
         nsdfg = dace.SDFG(node.label + "_expansion")
@@ -1320,12 +1325,12 @@ class PureSigmoid(ONNXForward):
 @op_implementation(op="LayerNormalization", name="pure")
 class PureLayerNormalization(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         # Create new SDFG
         nsdfg = dace.SDFG(node.label + "_expansion")
@@ -1489,15 +1494,17 @@ class PureLayerNormalization(ONNXForward):
 @op_implementation(op="Split", name="pure")
 class SplitPure(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
+        from daceml.transformation.replacement import onnx_constant_or_none
+        
         # Check if we have either split input or num_outputs attribute
         has_split_input = len(list(state.in_edges_by_connector(node, "split"))) > 0
         has_num_outputs = hasattr(node, 'num_outputs')
         
         if not (has_split_input or has_num_outputs):
             return False
-            
+        
         # If split input is provided, it must be a constant
         if has_split_input:
             split_node = next(state.in_edges_by_connector(node, "split")).src
@@ -1507,8 +1514,9 @@ class SplitPure(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        from daceml.transformation.replacement import onnx_constant_or_none
 
         nsdfg = dace.SDFG(node.label + "_expansion")
         nstate = nsdfg.add_state()
@@ -1575,8 +1583,10 @@ class SplitPure(ONNXForward):
 @op_implementation(op="Slice", name="pure")
 class PureSliceAllConstant(ONNXForward):
     @staticmethod
-    def _get_constant(conn: str, node: onnx_op.ONNXOp, state: SDFGState,
+    def _get_constant(conn: str, node: 'ONNXOp', state: SDFGState,
                       sdfg: SDFG):
+        from daceml.transformation.replacement import onnx_constant_or_none
+        
         try:
             srcnode = next(state.in_edges_by_connector(node, conn)).src
         except StopIteration:
@@ -1587,7 +1597,7 @@ class PureSliceAllConstant(ONNXForward):
         return onnx_constant_or_none(sdfg, srcnode)
 
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         for inconn in ("axes", "ends", "starts", "steps"):
             if state.in_edges_by_connector(node, inconn):
@@ -1599,7 +1609,7 @@ class PureSliceAllConstant(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         axes = PureSliceAllConstant._get_constant('axes', node, state, sdfg)
         ends = PureSliceAllConstant._get_constant('ends', node, state, sdfg)
@@ -1613,6 +1623,8 @@ class PureSliceAllConstant(ONNXForward):
                 steps = [1 for _ in axes]
             else:
                 raise RuntimeError("Unknown type")
+
+        from daceml.transformation import constant_folding
 
         constant_folding.remove_node_and_computation(sdfg, state, node, "axes")
         constant_folding.remove_node_and_computation(sdfg, state, node, "ends")
@@ -1662,7 +1674,7 @@ class PureSliceAllConstant(ONNXForward):
 @op_implementation(op="Shape", name="pure")
 class PureShape(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         data_desc = in_desc_with_name(node, state, sdfg, "data")
 
@@ -1675,7 +1687,7 @@ class PureShape(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         data_desc = in_desc_with_name(node, state, sdfg, "data")
@@ -1704,7 +1716,7 @@ class PureShape(ONNXForward):
 @op_implementation(op="Gather", name="pure")
 class PureGather(ONNXForward):
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         # To understand this operator, read the docs for np.take.
         # The ONNX docs are not easy to understand (and are incorrect in opset 11)
@@ -1786,7 +1798,7 @@ def Not(X, Y):
 @op_implementation(op="CumSum", name="pure")
 class PureCumSum(ONNXForward):
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         if node.exclusive or node.reverse:
@@ -1843,12 +1855,12 @@ class PureCumSum(ONNXForward):
 @op_implementation(op="Unsqueeze", name="pure")
 class PureUnsqueeze(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         # Create new SDFG
         nsdfg = dace.SDFG(node.label + "_expansion")
@@ -1903,12 +1915,12 @@ class PureUnsqueeze(ONNXForward):
 @op_implementation(op="Squeeze", name="pure")
 class PureSqueeze(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         # Create new SDFG
         nsdfg = dace.SDFG(node.label + "_expansion")

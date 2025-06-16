@@ -1,7 +1,6 @@
 import os
 import logging
 
-import daceml.transformation  # this registers the transformations with dace
 from dace import config
 
 log = logging.getLogger(__name__)

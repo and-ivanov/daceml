@@ -1,7 +1,6 @@
 import inspect
 import copy
-from typing import Dict, Tuple, Optional, Callable, Union, Any
-import functools
+from typing import Dict, Tuple, Optional, Callable, Union, Any, TYPE_CHECKING
 import textwrap
 
 import dace
@@ -9,12 +8,12 @@ from dace import SDFGState, SDFG, dtypes, nodes
 from dace.frontend.python.parser import DaceProgram
 from dace.registry import autoregister
 
-from daceml.onnx.nodes import onnx_op
 from daceml.onnx.forward_implementation_abc import ONNXForward
 from daceml.onnx.nodes.node_utils import parse_variadic_param
 from daceml.util.utils import in_desc_with_name, out_desc_with_name
-from daceml.transformation import constant_folding
 
+if TYPE_CHECKING:
+    from daceml.onnx.nodes.onnx_op import ONNXOp
 
 def op_implementation(op, name):
     """ A decorator that registers an op implementation.
@@ -43,7 +42,7 @@ def op_implementation(op, name):
 def program_for_node(program,
                      sdfg: SDFG,
                      state: SDFGState,
-                     node: onnx_op.ONNXOp,
+                     node: 'ONNXOp',
                      extra_vars: Optional[Dict[str, Any]] = None) -> SDFG:
     """ Expand a function to a dace program.
 
@@ -52,6 +51,8 @@ def program_for_node(program,
         All inputs that are not specified as parameters will be removed using
         constant_folding.remove_node_and_computation
     """
+    from daceml.transformation import constant_folding
+    
     input_names = node.schema.non_variadic_inputs()
     variadic_input_names = node.schema.variadic_inputs()
 
@@ -105,7 +106,7 @@ def program_for_node(program,
 def empty_sdfg_for_node(
     sdfg: SDFG,
     state: SDFGState,
-    node: onnx_op.ONNXOp,
+    node: 'ONNXOp',
     add_access_nodes=True
 ) -> Tuple[SDFG, SDFGState, Dict[str, nodes.AccessNode], Dict[
         str, nodes.AccessNode]]:
@@ -173,7 +174,7 @@ def python_pure_op_implementation(func, **compute: Dict[str, Callable]):
     @op_implementation(op=func.__name__, name="pure")
     class PureImpl(ONNXForward):
         @staticmethod
-        def forward(node: onnx_op.ONNXOp, state: SDFGState,
+        def forward(node: 'ONNXOp', state: SDFGState,
                     sdfg: SDFG) -> Union[nodes.Node, SDFG]:
             def compute_argument_resolver(arg: str):
                 if arg == "node":

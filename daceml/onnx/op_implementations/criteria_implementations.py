@@ -4,15 +4,16 @@ Criterion implementations
 
 import copy
 from typing import Union
+import typing
 
 import numpy as np
 
 import dace
 from dace import SDFG, SDFGState, nodes as nd
 
-from daceml import onnx as donnx
 from daceml.onnx.op_implementations.utils import op_implementation, program_for_node
-from daceml.onnx.nodes import onnx_op
+if typing.TYPE_CHECKING:
+    from daceml.onnx.nodes.onnx_op import ONNXOp
 from daceml.onnx.forward_implementation_abc import ONNXForward
 
 from daceml.util import in_desc_with_name, out_desc_with_name
@@ -21,7 +22,7 @@ from daceml.util import in_desc_with_name, out_desc_with_name
 @op_implementation(op="SoftmaxCrossEntropyLoss", name="pure")
 class PureSoftmaxCrossEntropyLoss(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         # Softmax is weird in opset 11, so let's stick to 2D for now
         if len(in_desc_with_name(node, state, sdfg, "scores").shape) != 2:
@@ -39,7 +40,7 @@ class PureSoftmaxCrossEntropyLoss(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> Union[nd.Node, SDFG]:
 
         if node.reduction == 'mean':

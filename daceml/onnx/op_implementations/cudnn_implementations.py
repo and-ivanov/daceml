@@ -1,5 +1,6 @@
 import functools
 from typing import Union, Optional, Tuple, List
+import typing
 
 import dace
 from dace import SDFGState, nodes as nd, SDFG, dtypes, data as dt
@@ -8,7 +9,8 @@ from dace.codegen.common import sym2cpp
 from daceml.onnx import environments
 from daceml.onnx.converters import clean_onnx_name
 from daceml.onnx.forward_implementation_abc import ONNXForward
-from daceml.onnx.nodes import onnx_op
+if typing.TYPE_CHECKING:
+    from daceml.onnx.nodes.onnx_op import ONNXOp
 from daceml.onnx.op_implementations import op_implementation, empty_sdfg_for_node
 from daceml.util import in_desc_with_name, out_desc_with_name, remove_output_connector, all_equal
 
@@ -146,7 +148,7 @@ class CudnnConvolution(ONNXForward):
     search_ws_size = 32 * 1024 * 1024
 
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
 
         descs = [("X", in_desc_with_name(node, state, sdfg, "X")),
@@ -183,7 +185,7 @@ class CudnnConvolution(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> Union[nd.Node, SDFG]:
 
         nsdfg, nstate, inputs, outputs = empty_sdfg_for_node(sdfg, state, node)
@@ -446,7 +448,7 @@ class CudnnBatchNormalizationTraining(ONNXForward):
     environments = [environments.cuDNN]
 
     @staticmethod
-    def forward_can_be_applied(node: onnx_op.ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         X = in_desc_with_name(node, state, sdfg, "X")
         if len(X.shape) != 4:
@@ -462,7 +464,7 @@ class CudnnBatchNormalizationTraining(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: onnx_op.ONNXOp,
+    def forward(node: 'ONNXOp',
                 state: SDFGState,
                 sdfg: SDFG,
                 reserved_ptr=False) -> Union[nd.Node, SDFG]:

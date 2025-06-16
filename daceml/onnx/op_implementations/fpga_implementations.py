@@ -7,13 +7,14 @@ from dace.sdfg import nodes
 from dace.sdfg.nodes import Node
 from dace.symbolic import symstr
 
-from daceml.onnx.nodes.onnx_op import ONNXOp
+if typing.TYPE_CHECKING:
+    from daceml.onnx.nodes.onnx_op import ONNXOp
+
 from daceml.onnx.forward_implementation_abc import ONNXForward
 import numpy as np
 import math
 
 from daceml.util.utils import in_desc_with_name, out_desc_with_name, in_edge_with_name
-from daceml.transformation import constant_folding
 from daceml.onnx.op_implementations.utils import op_implementation, program_for_node
 
 
@@ -45,7 +46,7 @@ class FPGAConv2D(ONNXForward):
     It may not synthesize to hardware, due to high resource consumption
     """
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
 
         X = in_desc_with_name(node, state, sdfg, "X")
@@ -94,7 +95,7 @@ class FPGAConv2D(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
         X = in_desc_with_name(node, state, sdfg, "X")
         W = in_desc_with_name(node, state, sdfg, "W")
@@ -343,7 +344,7 @@ class FPGAIm2ColConv(ONNXForward):
         Underneath it applies a Matrix Matrix Multiplication
     """
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         X = in_desc_with_name(node, state, sdfg, "X")
         W = in_desc_with_name(node, state, sdfg, "W")
@@ -390,7 +391,7 @@ class FPGAIm2ColConv(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
 
         X = in_desc_with_name(node, state, sdfg, "X")
@@ -924,7 +925,7 @@ class FPGAIm2ColConv_tiled(ONNXForward):
     image width are allowed as a tile size (but it does not need to evenly divide the whole image).
     '''
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         X = in_desc_with_name(node, state, sdfg, "X")
         W = in_desc_with_name(node, state, sdfg, "W")
@@ -989,7 +990,7 @@ class FPGAIm2ColConv_tiled(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp,
+    def forward(node: 'ONNXOp',
                 state: SDFGState,
                 sdfg: SDFG,
                 tiles=None,
@@ -1992,7 +1993,7 @@ else:
 @op_implementation(op="Relu", name="fpga")
 class FPGARelu(ONNXForward):
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         X = in_desc_with_name(node, state, sdfg, "X")
@@ -2104,7 +2105,7 @@ class FPGARelu(ONNXForward):
 @op_implementation(op="MaxPool", name="fpga")
 class FPGAMaxPool2D(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         X = in_desc_with_name(node, state, sdfg, "X")
         Y = out_desc_with_name(node, state, sdfg, "Y")
@@ -2144,7 +2145,7 @@ class FPGAMaxPool2D(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         # Max Pool: the current implementation exploit a sliding window. Considering a single batch and a single
@@ -2420,14 +2421,14 @@ class FPGAGemm(ONNXForward):
         TODO: support more cases
     '''
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         if node.alpha == 1.0 and node.beta == 1.0 and node.transA == 0 and node.transB == 1:
             return True
         return False
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         node.validate(sdfg, state)
 
@@ -2924,7 +2925,7 @@ class FPGAReshape(ONNXForward):
         TODO: have a transformation to get rid of reshapes. On device they should be useless.
     '''
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         node.validate(sdfg, state)
         if (in_desc_with_name(node, state, sdfg, "data").dtype !=
@@ -2936,6 +2937,7 @@ class FPGAReshape(ONNXForward):
         node.remove_in_connector("shape")
 
         shape_node = in_edge_with_name(node, state, "shape").src
+        from daceml.transformation import constant_folding
         constant_folding.remove_node_and_computation(sdfg, state, shape_node)
 
         def prog(data, reshaped):
@@ -2958,7 +2960,7 @@ class FPGAReshape(ONNXForward):
 @op_implementation(op="Softmax", name="fpga")
 class FPGASoftmax(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
 
         inparr = in_desc_with_name(node, state, sdfg, "input")
@@ -2967,7 +2969,7 @@ class FPGASoftmax(ONNXForward):
         return len(inparr.shape) - 1 == axis
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
         # TODO: check stability
         # try to avoid max computation, this could have
@@ -3115,7 +3117,7 @@ class FPGAMatMul(ONNXForward):
         TODO: improve expansion. Right now the #PEs in certain case depends only on one axis
         '''
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
 
         input0_dim = len(in_desc_with_name(node, state, sdfg, "A").shape)
@@ -3135,7 +3137,7 @@ class FPGAMatMul(ONNXForward):
         return False
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
 
         node.validate(sdfg, state)
@@ -3706,7 +3708,7 @@ else:
 @op_implementation(op="ReduceSum", name="fpga")
 class FPGAReduceSum(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         axes = node.axes
         indata = in_desc_with_name(node, state, sdfg, "data")
@@ -3724,7 +3726,7 @@ class FPGAReduceSum(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
         node.validate(sdfg, state)
         axes = node.axes
@@ -3831,7 +3833,7 @@ class PureSlice(ONNXForward):
         Slice expansion
     '''
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         # check that all the inputs (even the optional ones) are present and constant
 
@@ -3890,7 +3892,7 @@ class PureSlice(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
 
         start = sdfg._parent_onnx_model.clean_weights[

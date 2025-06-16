@@ -25,7 +25,8 @@ from daceml.autodiff.base_abc import (BackwardContext, BackwardResult,
                                       find_backward_implementation)
 from daceml.autodiff.utils import cast_consts_to_type
 from daceml.onnx.forward_implementation_abc import ONNXForward
-from daceml.onnx.nodes.onnx_op import ONNXOp, ONNXSum
+from daceml.onnx.nodes.onnx_op import ONNXOp
+from daceml.onnx.nodes.onnx_op_registry import ONNXSum
 from daceml.util.utils import find_str_not_in_set, in_edge_with_name
 
 ReverseNodeReturnType = Tuple[nd.Node, BackwardResult]
@@ -570,7 +571,6 @@ class BackwardPassGenerator:
 
         # recursively reverse the subgraph
         self._reverse_subgraph(forward_subgraph)
-
         self._applied = True
 
         # in some cases (accessnode -> accessnode), the descriptors for the gradients of the function outputs are not
@@ -624,12 +624,12 @@ class BackwardPassGenerator:
         """
         forward_nodes = {
             n
-            for e in self.forward_state.bfs_edges(self.required_gradients)
+            for e in self.forward_state.edge_bfs(self.required_gradients)
             for n in [e.src, e.dst]
         }
         backward_nodes = {
             n
-            for e in self.forward_state.bfs_edges(self.given_gradients,
+            for e in self.forward_state.edge_bfs(self.given_gradients,
                                                   reverse=True)
             for n in [e.src, e.dst]
         }
@@ -1064,6 +1064,8 @@ class BackwardPassGenerator:
         impl = find_backward_implementation(self.sdfg,
                                             forward_state=self.forward_state,
                                             node=node)
+        if node.name == "sum_gradient_A":
+            import pdb; pdb.set_trace()
         if impl is not None:
             backward_node, backward_result = impl.backward(
                 forward_node=node,

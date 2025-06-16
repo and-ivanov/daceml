@@ -20,11 +20,10 @@ from dace.frontend.python import parser
 from dace.symbolic import pystr_to_symbolic
 from dace.codegen import compiled_sdfg
 
-from daceml import transformation
 from daceml.onnx.shape_inference import shape_inference
 from daceml.onnx.converters import convert_attribute_proto, onnx_tensor_type_to_typeclass, clean_onnx_name
 from daceml.onnx.schema import ONNXParameterType
-from daceml.onnx.nodes.onnx_op import get_onnx_node, has_onnx_node, ONNXOp
+from daceml.onnx.nodes.onnx_op_registry import get_onnx_node, has_onnx_node
 from daceml.util import utils, is_cuda
 
 log = logging.getLogger(__name__)

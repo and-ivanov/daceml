@@ -13,6 +13,8 @@ from dace.transformation.interstate import StateFusion
 import daceml.onnx as donnx
 from daceml.autodiff import AutoDiffException, add_backward_pass
 
+from daceml.util.utils import expand_onnx_nodes
+
 ##################################
 # Testing utilities
 
@@ -66,7 +68,6 @@ class SDFGBackwardRunner:
         add_backward_pass(self.sdfg, state, [self.target], required_grads)
 
     def run(self, **inputs):
-
         # zero out all arrays
         intermediate_arrs = {
             name: np.zeros(arr.shape, dtype=getattr(np, arr.dtype.to_string()))

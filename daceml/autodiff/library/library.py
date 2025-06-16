@@ -25,7 +25,6 @@ class ParameterArray(data.Array):
     # since this can be None, this is not a DataProperty
     gradient = properties.Property(dtype=str,
                                    desc="The corresponding gradient buffer",
-                                   optional=True,
                                    default=None)
 
     def __init__(self, *args, **kwargs):

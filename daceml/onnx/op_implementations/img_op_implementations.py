@@ -11,7 +11,8 @@ from dace.transformation.dataflow import MapExpansion, MapCollapse
 from dace.sdfg.nodes import Node
 
 from daceml.onnx.forward_implementation_abc import ONNXForward
-from daceml.onnx.nodes.onnx_op import ONNXOp
+if typing.TYPE_CHECKING:
+    from daceml.onnx.nodes.onnx_op import ONNXOp
 from daceml.onnx.op_implementations.utils import op_implementation, program_for_node
 from daceml.util.utils import in_desc_with_name, out_desc_with_name, in_edge_with_name, out_edge_with_name
 from daceml.onnx.op_implementations.utils import python_pure_op_implementation
@@ -28,7 +29,7 @@ def _prod(sequence):
 @op_implementation(op="MaxPool", name="pure")
 class PureMaxPool2D(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         X = in_desc_with_name(node, state, sdfg, "X")
 
@@ -60,7 +61,7 @@ class PureMaxPool2D(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
         X = in_desc_with_name(node, state, sdfg, "X")
         Y = out_desc_with_name(node, state, sdfg, "Y")
@@ -149,7 +150,7 @@ class PureConv2D(ONNXForward):
 
 
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:        
         X = in_desc_with_name(node, state, sdfg, "X")
         W = in_desc_with_name(node, state, sdfg, "W")
@@ -196,7 +197,7 @@ class PureConv2D(ONNXForward):
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
         X = in_desc_with_name(node, state, sdfg, "X")
         W = in_desc_with_name(node, state, sdfg, "W")
@@ -337,12 +338,12 @@ class PureConv2D(ONNXForward):
 @op_implementation(op="BatchNormalization", name="pure")
 class PureBatchNormalization(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
         # Create new SDFG
         nsdfg = dace.SDFG(node.label + "_expansion")
@@ -520,12 +521,12 @@ def GlobalAveragePool(X, Y):
 @op_implementation(op="GlobalAveragePool", name="pure")
 class PureGlobalAveragePool(ONNXForward):
     @staticmethod
-    def forward_can_be_applied(node: ONNXOp, state: SDFGState,
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
         return True
 
     @staticmethod
-    def forward(node: ONNXOp, state: SDFGState,
+    def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[nodes.Node, SDFG]:
         x_name = list(node.in_connectors)[0]
         y_name = list(node.out_connectors)[0]

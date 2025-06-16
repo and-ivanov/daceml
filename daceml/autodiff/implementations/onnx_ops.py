@@ -17,7 +17,6 @@ from daceml.onnx.op_implementations import pure_implementations, \
     cudnn_implementations, CudnnBatchNormalizationTraining, setup_fake_data
 import daceml.autodiff.utils as butils
 from daceml.autodiff.base_abc import BackwardImplementation, BackwardContext, BackwardResult
-from daceml.transformation.replacement import onnx_constant_or_none
 from daceml.util import utils
 import daceml
 
@@ -146,6 +145,7 @@ class DefaultClipBackward(BackwardImplementation):
         given_gradients: List[Optional[str]],
         required_gradients: List[Optional[str]]
     ) -> Tuple[Union[nd.Node, dace.SDFG], BackwardResult]:
+        from daceml.transformation.replacement import onnx_constant_or_none
 
         result_node, result = butils.add_empty_sdfg_for_node(
             forward_node, ["input_grad", "output_grad", "input"], context)

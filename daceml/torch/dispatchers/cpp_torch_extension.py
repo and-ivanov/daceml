@@ -516,13 +516,25 @@ def register_and_compile_torch_extension(module: 'daceml.torch.DaceModule',
     compiler.generate_program_folder(None, [program], torch_module_build_path)
 
     include_path = os.path.abspath(os.path.join('.dacecache', compiled.sdfg.name, "include"))
+    include_path_bwd = os.path.abspath(os.path.join('.dacecache', f"{compiled.sdfg.name}_backward", "include"))
     dace_include_path = os.path.abspath(os.path.join(os.path.dirname(dace.__file__), "runtime", "include"))
     code_path = os.path.join('.dacecache', compiled.sdfg.name, "src", "cpu", f"{compiled.sdfg.name}.cpp")
+    code_path_bwd = os.path.join('.dacecache', f"{compiled.sdfg.name}_backward", "src", "cpu", f"{compiled.sdfg.name}_backward.cpp")
     torch_code_path = os.path.join('.dacecache', f"torch_{compiled.sdfg.name}", "src", "cpu", f"torch_{compiled.sdfg.name}.cpp")
+    sources = [code_path, torch_code_path]
+    if os.path.exists(code_path_bwd):
+        sources.append(code_path_bwd)
+    dace_include_path_blas = os.path.abspath(os.path.join(os.path.dirname(dace.__file__), "libraries", "blas", "include"))
+    conda_lib_path = os.path.abspath(os.getenv("CONDA_PREFIX") + "/lib")
     torch.utils.cpp_extension.load(
         name=libname,
-        sources=[code_path, torch_code_path],
-        extra_include_paths=[include_path, dace_include_path],
+        sources=sources,
+        extra_cflags=["-g"],
+        extra_include_paths=[include_path, include_path_bwd, dace_include_path, dace_include_path_blas],
+        extra_ldflags=[
+            f'-L{conda_lib_path}',
+            '-lcblas',
+        ],
         is_python_module=False,
     )
 

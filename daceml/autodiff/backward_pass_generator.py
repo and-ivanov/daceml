@@ -549,24 +549,23 @@ class BackwardPassGenerator:
             forward_subgraph = self._find_subgraph_to_differentiate()
 
         # check that all edges are float
-        for edge, parent_subgraph in forward_subgraph.all_edges_recursive():
-            if isinstance(parent_subgraph, SDFGState):
-                parent_sdfg = parent_subgraph.parent
-            elif isinstance(parent_subgraph, dstate.StateSubgraphView):
-                parent_sdfg = parent_subgraph.graph.parent
-            elif isinstance(parent_subgraph, SDFG):
-                # if there are any fancy things on the interstate edges we should probably throw an error
-                continue
-            else:
-                raise AutoDiffException("Unexpected subgraph structure")
+        # for edge, parent_subgraph in forward_subgraph.all_edges_recursive():
+        #     if isinstance(parent_subgraph, SDFGState):
+        #         parent_sdfg = parent_subgraph.parent
+        #     elif isinstance(parent_subgraph, dstate.StateSubgraphView):
+        #         parent_sdfg = parent_subgraph.graph.parent
+        #     elif isinstance(parent_subgraph, SDFG):
+        #         # if there are any fancy things on the interstate edges we should probably throw an error
+        #         continue
+        #     else:
+        #         raise AutoDiffException("Unexpected subgraph structure")
 
-            if edge.data.data:
-                edge_type = parent_sdfg.arrays[edge.data.data].dtype
-                if edge_type not in [dace.float16, dace.float32, dace.float64]:
-                    raise AutoDiffException(
-                        f"Expected Subgraph to differentiate to only contain float edges, but data {edge.data}"
-                        f" on edge {edge} has type {edge_type}")
-
+        #     if edge.data.data:
+        #         edge_type = parent_sdfg.arrays[edge.data.data].dtype
+        #         if edge_type not in [dace.float16, dace.float32, dace.float64]:
+        #             raise AutoDiffException(
+        #                 f"Expected Subgraph to differentiate to only contain float edges, but data {edge.data}"
+        #                 f" on edge {edge} has type {edge_type}")
         self._disambiguate_direction_dependent_views()
 
         # recursively reverse the subgraph
@@ -680,7 +679,6 @@ class BackwardPassGenerator:
 
                 reversed_node, backward_result = self._get_reverse_node(
                     node, given_gradients, required_gradients)
-
                 self.reverse_map[node] = reversed_node
                 self.result_map[node] = backward_result
 
@@ -688,7 +686,6 @@ class BackwardPassGenerator:
                 # the gradients ...
                 self._connect_given_gradients(subgraph, node)
                 # ... and any required input values from the forward pass
-
                 ####################################
                 # Determine which forward inputs we need to connect.
                 # these are the in_connectors on the reverse node, minus what has already been connected.
@@ -701,9 +698,7 @@ class BackwardPassGenerator:
                 required_inputs = {c: c for c in required_inputs}
                 self._connect_forward_inputs(node, reversed_node,
                                              required_inputs)
-
                 if isinstance(node, nd.AccessNode):
-
                     # this means we are writing out a grad to an array.
                     # initialize the gradient if it hasn't been initialized already (this can also happen in
                     # _connect_given_gradients
@@ -711,7 +706,6 @@ class BackwardPassGenerator:
                     if array_grad_name not in self.backward_sdfg.arrays:
                         # this grad hasn't been written before: initialize it
                         self._add_gradient_data_descriptor(node.data)
-
                     # we need to make all incoming gradients sum
                     if self.backward_state.in_degree(reversed_node) > 1:
                         summation_node = ONNXSum(f"sum_{array_grad_name}")
@@ -763,7 +757,6 @@ class BackwardPassGenerator:
                     elif self.backward_state.in_degree(reversed_node) == 1:
                         self._set_wcr_sum_if_needed(
                             self.backward_state.in_edges(reversed_node)[0])
-
             except AutoDiffException as e:
                 raise AutoDiffException("Failed at node {}: {}".format(
                     node, str(e))) from e
@@ -897,10 +890,11 @@ class BackwardPassGenerator:
                                     node. The dict maps the fwd pass connector we require to the connector that we.
                                     should connect to.
         """
-
-        if set(required_inputs).difference(forward_node.in_connectors):
+        # forward_node_in_connectors = forward_node.in_connectors # this doesn't work for access nodes (they don't have in_connectors)
+        forward_node_in_connectors = [edge.dst_conn for edge in self.forward_state.in_edges(forward_node)]
+        if set(required_inputs).difference(forward_node_in_connectors):
             missing_connectors = \
-                set(required_inputs).difference(forward_node.in_connectors)
+                set(required_inputs).difference(forward_node_in_connectors)
             raise ValueError(f"Can't connect connectors"
                              f" {missing_connectors} to {backward_node} "
                              f"because they don't exist on the corresponding "
@@ -1064,8 +1058,7 @@ class BackwardPassGenerator:
         impl = find_backward_implementation(self.sdfg,
                                             forward_state=self.forward_state,
                                             node=node)
-        if node.name == "sum_gradient_A":
-            import pdb; pdb.set_trace()
+
         if impl is not None:
             backward_node, backward_result = impl.backward(
                 forward_node=node,

@@ -452,23 +452,23 @@ class PureResize(ONNXForward):
         if mode == 'linear':
             tasklet_code.append(f"""
             // Linear interpolation
-            float x0 = __inp[inp_idx];
-            float x1 = __inp[inp_idx + {inp_data_desc.strides[axes[0]]}];  // Second index for linear interpolation
+            float x0 = __inp [inp_idx];
+            float x1 = __inp [inp_idx + {inp_data_desc.strides[axes[0]]}];  // Second index for linear interpolation
             float result = w0 * x0 + w1 * x1;
             """)
         elif mode == 'cubic':
             tasklet_code.append(f"""
             // Cubic interpolation
-            float x0 = __inp[inp_idx];
-            float x1 = __inp[inp_idx + {inp_data_desc.strides[axes[0]]}];
-            float x2 = __inp[inp_idx + {2*inp_data_desc.strides[axes[0]]}];
-            float x3 = __inp[inp_idx + {3*inp_data_desc.strides[axes[0]]}];
+            float x0 = __inp [inp_idx];
+            float x1 = __inp [inp_idx + {inp_data_desc.strides[axes[0]]}];
+            float x2 = __inp [inp_idx + {2*inp_data_desc.strides[axes[0]]}];
+            float x3 = __inp [inp_idx + {3*inp_data_desc.strides[axes[0]]}];
             float result = w0 * x0 + w1 * x1 + w2 * x2 + w3 * x3;
             """)
         else:  # nearest or default
             tasklet_code.append("""
             // Nearest neighbor interpolation
-            float result = __inp[inp_idx];
+            float result = __inp [inp_idx];
             """)
         
         # Handle antialiasing if enabled
@@ -517,7 +517,7 @@ class PureResize(ONNXForward):
         # Write the result to output
         tasklet_code.append("""
         // Write output
-        __out[out_idx] = result;
+        __out [out_idx] = result;
         """)
         
         # Close dimension loops
@@ -609,11 +609,6 @@ def Div(A, B, C):
 @python_pure_op_implementation
 def Where(condition, X, Y, output):
     output[:] = np.where(condition, X, Y)
-
-
-@python_pure_op_implementation(axes=lambda node: node.axes)
-def ReduceMean(data, reduced):
-    reduced[:] = np.mean(data, axis=axes)
 
 
 @python_pure_op_implementation
@@ -773,26 +768,76 @@ def Identity(input, output):
 
 @op_implementation(op="Expand", name="pure")
 class PureExpand(ONNXForward):
-    """ Handle no-op case for Expand """
     @staticmethod
     def forward_can_be_applied(node: 'ONNXOp', state: SDFGState,
                                sdfg: SDFG) -> bool:
-        return iterables_equal(
-            in_desc_with_name(node, state, sdfg, "input").shape,
-            out_desc_with_name(node, state, sdfg, "output").shape)
+        try:
+            in_desc = in_desc_with_name(node, state, sdfg, "input")
+            out_desc = out_desc_with_name(node, state, sdfg, "output")
+            in_desc_with_name(node, state, sdfg, "shape")
+        except:
+            return False
+
+        in_shape = in_desc.shape
+        out_shape = out_desc.shape
+        if len(in_shape) > len(out_shape):
+            return False
+
+        # check that the shapes are broadcastable
+        for i, o in zip(reversed(in_shape), reversed(out_shape)):
+            if i != 1 and i != o:
+                return False
+        return True
 
     @staticmethod
     def forward(node: 'ONNXOp', state: SDFGState,
                 sdfg: SDFG) -> typing.Union[Node, SDFG]:
-        from daceml.transformation import constant_folding
 
-        constant_folding.remove_node_and_computation(sdfg, state, node,
-                                                     "shape")
+        nsdfg, nstate, input_nodes, output_nodes = empty_sdfg_for_node(
+            sdfg, state, node, add_access_nodes=True)
+        input_desc = in_desc_with_name(node, state, sdfg, "input")
+        output_desc = out_desc_with_name(node, state, sdfg, "output")
+        shape_desc = in_desc_with_name(node, state, sdfg, "shape")
 
-        def prog(input, output):
-            output[:] = input
+        num_out_dims = len(output_desc.shape)
+        num_in_dims = len(input_desc.shape)
 
-        return program_for_node(prog, sdfg, state, node)
+        code = []
+        for i in range(num_out_dims):
+            code.append(
+                f"for (int i{i} = 0; i{i} < {output_desc.shape[i]}; ++i{i}) {{")
+        code.append("    int input_idx = 0;")
+        for i in range(num_in_dims):
+            j = i + num_out_dims - num_in_dims
+            code.append(
+                f"    if ({input_desc.shape[i]} != 1) input_idx += i{j} * {input_desc.strides[i]};"
+            )
+
+        output_idx_str = " + ".join(
+            [f"i{i} * {s}" for i, s in enumerate(output_desc.strides)])
+
+        code.append(f"    __output[{output_idx_str}] = __input[input_idx];")
+
+        for _ in range(num_out_dims):
+            code.append("}")
+
+        tasklet = nstate.add_tasklet(
+            name=node.label + "_tasklet",
+            inputs={
+                "__input": dace.pointer(input_desc.dtype),
+                "__shape": dace.pointer(shape_desc.dtype)
+            },
+            outputs={"__output": dace.pointer(output_desc.dtype)},
+            code="\n".join(code),
+            language=dace.Language.CPP)
+
+        nstate.add_edge(input_nodes["input"], None, tasklet, "__input",
+                        dace.Memlet.from_array("input", input_desc))
+        nstate.add_edge(input_nodes["shape"], None, tasklet, "__shape",
+                        dace.Memlet.from_array("shape", shape_desc))
+        nstate.add_edge(tasklet, "__output", output_nodes["output"], None,
+                        dace.Memlet.from_array("output", output_desc))
+        return nsdfg
 
 
 @python_pure_op_implementation(
@@ -804,21 +849,6 @@ def Reciprocal(X, Y):
 @python_pure_op_implementation
 def Tanh(input, output):
     output[:] = dace.elementwise(lambda x: tanh(x), input)
-
-
-@python_pure_op_implementation(axes=lambda node: node.axes)
-def ReduceSum(data, reduced):
-    reduced[:] = np.sum(data, axis=axes)
-
-
-@python_pure_op_implementation(axes=lambda node: node.axes)
-def ReduceMax(data, reduced):
-    reduced[:] = np.max(data, axis=axes)
-
-
-@python_pure_op_implementation(axes=lambda node: node.axes)
-def ReduceMin(data, reduced):
-    reduced[:] = np.min(data, axis=axes)
 
 
 softmax_compute = dict(
@@ -1892,10 +1922,10 @@ class PureUnsqueeze(ONNXForward):
                 "__data": dace.pointer(data_desc.dtype),
                 "__axes": dace.pointer(axes_desc.dtype),
             },
-            outputs={"__expanded": dace.pointer(expanded_desc.dtype)},
+            outputs={"__unsqueezed": dace.pointer(expanded_desc.dtype)},
             code=f"""
             for (int i = 0; i < {data_size}; i++) {{
-                __expanded[i] = __data[i];
+                __unsqueezed[i] = __data[i];
             }}
             """,
             language=dace.Language.CPP
@@ -1906,7 +1936,7 @@ class PureUnsqueeze(ONNXForward):
                        dace.Memlet.from_array("data", data_desc))
         nstate.add_edge(axes_read, None, tasklet, "__axes",
                        dace.Memlet.from_array("axes", axes_desc))
-        nstate.add_edge(tasklet, "__expanded", expanded_write, None,
+        nstate.add_edge(tasklet, "__unsqueezed", expanded_write, None,
                        dace.Memlet.from_array("expanded", expanded_desc))
 
         return nsdfg
@@ -1969,4 +1999,506 @@ class PureSqueeze(ONNXForward):
         nstate.add_edge(tasklet, "__squeezed", squeezed_write, None,
                        dace.Memlet.from_array("squeezed", squeezed_desc))
 
+        return nsdfg
+
+
+@op_implementation(op="ReduceMean", name="pure")
+class PureReduceMean(ONNXForward):
+    @staticmethod
+    def forward(node: 'ONNXOp', state: SDFGState, sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        # Get keepdims attribute (default 1)
+        keepdims = getattr(node, 'keepdims', 1)
+        
+        # Get noop_with_empty_axes attribute (default 0)
+        noop_with_empty_axes = getattr(node, 'noop_with_empty_axes', 0)
+
+        # Create a new SDFG for the reduction with unique name
+        uid = state.node_id(node)
+        nsdfg = SDFG(f'reduce_mean_{uid}')
+        nstate = nsdfg.add_state(f'reduce_mean_{uid}')
+
+        # Get input and output arrays with deep copies and unique names
+        data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "data"))
+        reduced_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "reduced"))
+        
+        # Add arrays to the SDFG with unique names
+        data_name = f"data"
+        reduced_name = f"reduced"
+        nsdfg.add_datadesc(data_name, data_desc)
+        nsdfg.add_datadesc(reduced_name, reduced_desc)
+        nsdfg.arrays[data_name].transient = False
+        nsdfg.arrays[reduced_name].transient = False
+
+        # Create access nodes
+        data_read = nstate.add_read(data_name)
+        reduced_write = nstate.add_write(reduced_name)
+
+        # Determine axes and num_axes
+        axes_name = f"axes"
+        if axes_name in node.in_connectors:
+            [axes_edge] = state.in_edges_by_connector(node, 'axes')
+            axes_desc = copy.deepcopy(sdfg.arrays[axes_edge.data.data])
+            nsdfg.add_datadesc(axes_name, axes_desc)
+            nsdfg.arrays[axes_name].transient = False
+            axes_node = nstate.add_access(axes_name)
+        else:
+            axes = getattr(node, axes_name, None)
+            if not axes:
+                if noop_with_empty_axes:
+                    axes_values = []
+                else:
+                    axes_values = list(range(len(data_desc.shape)))
+            else:
+                axes_values = list(axes)
+            # Create axes_arr as an array with just axes_values
+            axes_arr_shape = [len(axes_values)]
+            axes_arr_dtype = dace.int64
+            _, axes_desc = nsdfg.add_array(axes_name, axes_arr_shape, axes_arr_dtype)
+            axes_node = nstate.add_access(axes_name)
+
+            # Add a tasklet to initialize the axes array in the SDFG
+            axes_init_tasklet = nstate.add_tasklet(
+                f"init_axes",
+                set(),
+                {"out": dace.pointer(axes_arr_dtype)},
+                "\n".join([f"out [{idx}] = {val};" for idx, val in enumerate(axes_values)]),
+                language=dace.Language.CPP
+            )
+            nstate.add_edge(axes_init_tasklet, "out", axes_node, None, dace.Memlet(f"{axes_name}[0:{len(axes_values)}]"))
+
+        is_axes_scalar = len(axes_desc.shape) == 1 and axes_desc.shape[0] == 1
+
+        # Create the reduction tasklet with embedded constants
+        shape_str = ', '.join(map(str, data_desc.shape))
+        tasklet_code = (f"""
+            constexpr long long input_dims = {len(data_desc.shape)};
+            constexpr long long output_dims = {len(reduced_desc.shape)};
+            constexpr long long num_reduce_dims = {len(axes_desc.shape)};
+            constexpr long long num_non_reduce_dims = {len(data_desc.shape) - len(axes_desc.shape)};
+            constexpr long long keepdims = {keepdims};
+            long long reduce_dims [num_reduce_dims] = """ +
+            ("{axes_arr};" if is_axes_scalar else f'{{{", ".join([f"axes_arr[{i}]" for i in range(len(axes_desc.shape))])}}};') +
+            f""" 
+
+            long long input_shape [input_dims] = {{{", ".join([str(data_desc.shape[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_shape [output_dims] = {{{", ".join([str(reduced_desc.shape[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long input_strides [input_dims] = {{{", ".join([str(data_desc.strides[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_strides [output_dims] = {{{", ".join([str(reduced_desc.strides[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long output_strides_input [input_dims];
+            long long output_strides_input_idx = 0;
+            for (long long i = 0; i < input_dims; i++) {{
+                int is_reduce_dim = 0;
+                for (long long j = 0; j < num_reduce_dims; j++) {{
+                    if (reduce_dims[j] == i) {{
+                        is_reduce_dim = 1;
+                        break;
+                    }}
+                }}
+                if (is_reduce_dim) {{
+                    output_strides_input[i] = 0;
+                    if (keepdims) {{
+                        output_strides_input_idx++;
+                    }}
+                }} else {{
+                    output_strides_input[i] = output_strides [output_strides_input_idx];
+                    output_strides_input_idx++;
+                }}
+            }}
+            
+            // initialize output to zero
+            """ +
+            "\n".join([f"for (long long i{i} = 0; i{i} < output_shape[{i}]; i{i}++) {{" for i in range(len(reduced_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides [{i}] * i{i}" for i in range(len(reduced_desc.shape))]) + "] = 0.0;" + "\n" +
+            "\n".join(["}" for _ in reduced_desc.shape]) + "\n" +
+            """
+            
+            // Compute the number of elements to reduce over
+            long long reduce_size = 1;
+            for (long long i = 0; i < input_dims; i++) {{
+                int is_reduce_dim = 0;
+                for (long long j = 0; j < num_reduce_dims; j++) {{
+                    if (reduce_dims[j] == i) {{
+                        is_reduce_dim = 1;
+                        break;
+                    }}
+                }}
+                if (is_reduce_dim) {{
+                    reduce_size *= input_shape[i];
+                }}
+            }}
+
+            // Loop over all input elements
+            """ + 
+            "\n".join([f"for (long long i{i} = 0; i{i} < input_shape[{i}]; i{i}++) {{" for i in range(len(data_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides_input[{i}] * i{i}" for i in range(len(data_desc.shape))]) +"]" +
+            " += inp [" + " + ".join([f"input_strides[{i}] * i{i}" for i in range(len(data_desc.shape))]) + "] / reduce_size;" + "\n" +
+            "\n".join(["}" for _ in data_desc.shape]) + "\n" +
+            """
+        """)
+        tasklet = nstate.add_tasklet(
+            f'reduce_mean_{uid}',
+            {'inp': dace.pointer(data_desc.dtype), 'axes_arr': axes_desc.dtype},
+            {'out': dace.pointer(reduced_desc.dtype)},
+            tasklet_code,
+            language=dace.Language.CPP)
+
+        # Add edges for axes input, num_axes, data input and output
+        nstate.add_edge(data_read, None, tasklet, 'inp', nsdfg.make_array_memlet(data_name))
+        nstate.add_edge(axes_node, None, tasklet, 'axes_arr', nsdfg.make_array_memlet(axes_name))
+        nstate.add_edge(tasklet, 'out', reduced_write, None, nsdfg.make_array_memlet(reduced_name))
+
+        return nsdfg
+
+
+@op_implementation(op="ReduceSum", name="pure")
+class PureReduceSum(ONNXForward):
+    @staticmethod
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState, sdfg: SDFG) -> bool:
+        # Allow any axes input
+        return True
+
+    @staticmethod
+    def forward(node: 'ONNXOp', state: SDFGState, sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        keepdims = getattr(node, 'keepdims', 1)
+        noop_with_empty_axes = getattr(node, 'noop_with_empty_axes', 0)
+        uid = state.node_id(node)
+        nsdfg = SDFG(f'reduce_sum_{uid}')
+        nstate = nsdfg.add_state(f'reduce_sum_{uid}')
+        data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "data"))
+        reduced_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "reduced"))
+        data_name = f"data"
+        reduced_name = f"reduced"
+        nsdfg.add_datadesc(data_name, data_desc)
+        nsdfg.add_datadesc(reduced_name, reduced_desc)
+        nsdfg.arrays[data_name].transient = False
+        nsdfg.arrays[reduced_name].transient = False
+        data_read = nstate.add_read(data_name)
+        reduced_write = nstate.add_write(reduced_name)
+        axes_name = f"axes"
+        if axes_name in node.in_connectors:
+            [axes_edge] = state.in_edges_by_connector(node, 'axes')
+            axes_desc = copy.deepcopy(sdfg.arrays[axes_edge.data.data])
+            nsdfg.add_datadesc(axes_name, axes_desc)
+            nsdfg.arrays[axes_name].transient = False
+            axes_node = nstate.add_access(axes_name)
+        else:
+            axes = getattr(node, axes_name, None)
+            if not axes:
+                if noop_with_empty_axes:
+                    axes_values = []
+                else:
+                    axes_values = list(range(len(data_desc.shape)))
+            else:
+                axes_values = list(axes)
+            axes_arr_shape = [len(axes_values)]
+            axes_arr_dtype = dace.int64
+            _, axes_desc = nsdfg.add_array(axes_name, axes_arr_shape, axes_arr_dtype)
+            axes_node = nstate.add_access(axes_name)
+            axes_init_tasklet = nstate.add_tasklet(
+                f"init_axes",
+                set(),
+                {"out": dace.pointer(axes_arr_dtype)},
+                "\n".join([f"out [{idx}] = {val};" for idx, val in enumerate(axes_values)]),
+                language=dace.Language.CPP
+            )
+            nstate.add_edge(axes_init_tasklet, "out", axes_node, None, dace.Memlet(f"{axes_name}[0:{len(axes_values)}]"))
+
+        is_axes_scalar = len(axes_desc.shape) == 1 and axes_desc.shape[0] == 1
+
+        # Create the reduction tasklet with embedded constants
+        tasklet_code = (f"""
+            constexpr long long input_dims = {len(data_desc.shape)};
+            constexpr long long output_dims = {len(reduced_desc.shape)};
+            constexpr long long num_reduce_dims = {len(axes_desc.shape)};
+            constexpr long long num_non_reduce_dims = {len(data_desc.shape) - len(axes_desc.shape)};
+            constexpr long long keepdims = {keepdims};
+            long long reduce_dims [num_reduce_dims] = """ +
+            ("{axes_arr};" if is_axes_scalar else f'{{{", ".join([f"axes_arr[{i}]" for i in range(len(axes_desc.shape))])}}};') +
+            f""" 
+
+            long long input_shape [input_dims] = {{{", ".join([str(data_desc.shape[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_shape [output_dims] = {{{", ".join([str(reduced_desc.shape[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long input_strides [input_dims] = {{{", ".join([str(data_desc.strides[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_strides [output_dims] = {{{", ".join([str(reduced_desc.strides[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long output_strides_input [input_dims];
+            long long output_strides_input_idx = 0;
+            for (long long i = 0; i < input_dims; i++) {{
+                int is_reduce_dim = 0;
+                for (long long j = 0; j < num_reduce_dims; j++) {{
+                    if (reduce_dims[j] == i) {{
+                        is_reduce_dim = 1;
+                        break;
+                    }}
+                }}
+                if (is_reduce_dim) {{
+                    output_strides_input[i] = 0;
+                    if (keepdims) {{
+                        output_strides_input_idx++;
+                    }}
+                }} else {{
+                    output_strides_input[i] = output_strides [output_strides_input_idx];
+                    output_strides_input_idx++;
+                }}
+            }}
+            
+            // initialize output to zero
+            """ +
+            "\n".join([f"for (long long i{i} = 0; i{i} < output_shape[{i}]; i{i}++) {{" for i in range(len(reduced_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides [{i}] * i{i}" for i in range(len(reduced_desc.shape))]) + "] = 0.0;" + "\n" +
+            "\n".join(["}" for _ in reduced_desc.shape]) + "\n" +
+            """
+            
+            // Loop over all input elements
+            """ + 
+            "\n".join([f"for (long long i{i} = 0; i{i} < input_shape[{i}]; i{i}++) {{" for i in range(len(data_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides_input[{i}] * i{i}" for i in range(len(data_desc.shape))]) +"]" +
+            " += inp [" + " + ".join([f"input_strides[{i}] * i{i}" for i in range(len(data_desc.shape))]) + "];" + "\n" +
+            "\n".join(["}" for _ in data_desc.shape]) + "\n" +
+            """
+        """)
+        tasklet = nstate.add_tasklet(
+            f'reduce_sum_{uid}',
+            {'inp': dace.pointer(data_desc.dtype), 'axes_arr': axes_desc.dtype},
+            {'out': dace.pointer(reduced_desc.dtype)},
+            tasklet_code,
+            language=dace.Language.CPP)
+        nstate.add_edge(data_read, None, tasklet, 'inp', nsdfg.make_array_memlet(data_name))
+        nstate.add_edge(axes_node, None, tasklet, 'axes_arr', nsdfg.make_array_memlet(axes_name))
+        nstate.add_edge(tasklet, 'out', reduced_write, None, nsdfg.make_array_memlet(reduced_name))
+        return nsdfg
+
+
+@op_implementation(op="ReduceMax", name="pure")
+class PureReduceMax(ONNXForward):
+    @staticmethod
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState, sdfg: SDFG) -> bool:
+        return True
+
+    @staticmethod
+    def forward(node: 'ONNXOp', state: SDFGState, sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        keepdims = getattr(node, 'keepdims', 1)
+        noop_with_empty_axes = getattr(node, 'noop_with_empty_axes', 0)
+        uid = state.node_id(node)
+        nsdfg = SDFG(f'reduce_max_{uid}')
+        nstate = nsdfg.add_state(f'reduce_max_{uid}')
+        data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "data"))
+        reduced_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "reduced"))
+        data_name = f"data"
+        reduced_name = f"reduced"
+        nsdfg.add_datadesc(data_name, data_desc)
+        nsdfg.add_datadesc(reduced_name, reduced_desc)
+        nsdfg.arrays[data_name].transient = False
+        nsdfg.arrays[reduced_name].transient = False
+        data_read = nstate.add_read(data_name)
+        reduced_write = nstate.add_write(reduced_name)
+        axes_name = f"axes"
+        if axes_name in node.in_connectors:
+            [axes_edge] = state.in_edges_by_connector(node, 'axes')
+            axes_desc = copy.deepcopy(sdfg.arrays[axes_edge.data.data])
+            nsdfg.add_datadesc(axes_name, axes_desc)
+            nsdfg.arrays[axes_name].transient = False
+            axes_node = nstate.add_access(axes_name)
+        else:
+            axes = getattr(node, axes_name, None)
+            if not axes:
+                if noop_with_empty_axes:
+                    axes_values = []
+                else:
+                    axes_values = list(range(len(data_desc.shape)))
+            else:
+                axes_values = list(axes)
+            axes_arr_shape = [len(axes_values)]
+            axes_arr_dtype = dace.int64
+            _, axes_desc = nsdfg.add_array(axes_name, axes_arr_shape, axes_arr_dtype)
+            axes_node = nstate.add_access(axes_name)
+            axes_init_tasklet = nstate.add_tasklet(
+                f"init_axes",
+                set(),
+                {"out": dace.pointer(axes_arr_dtype)},
+                "\n".join([f"out [{idx}] = {val};" for idx, val in enumerate(axes_values)]),
+                language=dace.Language.CPP
+            )
+            nstate.add_edge(axes_init_tasklet, "out", axes_node, None, dace.Memlet(f"{axes_name}[0:{len(axes_values)}]"))
+
+        is_axes_scalar = len(axes_desc.shape) == 1 and axes_desc.shape[0] == 1
+
+        # Create the reduction tasklet with embedded constants
+        tasklet_code = (f"""
+            constexpr long long input_dims = {len(data_desc.shape)};
+            constexpr long long output_dims = {len(reduced_desc.shape)};
+            constexpr long long num_reduce_dims = {len(axes_desc.shape)};
+            constexpr long long num_non_reduce_dims = {len(data_desc.shape) - len(axes_desc.shape)};
+            constexpr long long keepdims = {keepdims};
+            long long reduce_dims[num_reduce_dims] = """ +
+            ("{axes_arr};" if is_axes_scalar else f'{{{", ".join([f"axes_arr[{i}]" for i in range(len(axes_desc.shape))])}}};') +
+            f""" 
+
+            long long input_shape [input_dims] = {{{", ".join([str(data_desc.shape[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_shape [output_dims] = {{{", ".join([str(reduced_desc.shape[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long input_strides [input_dims] = {{{", ".join([str(data_desc.strides[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_strides [output_dims] = {{{", ".join([str(reduced_desc.strides[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long output_strides_input[input_dims];
+            long long output_strides_input_idx = 0;
+            for (long long i = 0; i < input_dims; i++) {{
+                int is_reduce_dim = 0;
+                for (long long j = 0; j < num_reduce_dims; j++) {{
+                    if (reduce_dims[j] == i) {{
+                        is_reduce_dim = 1;
+                        break;
+                    }}
+                }}
+                if (is_reduce_dim) {{
+                    output_strides_input[i] = 0;
+                    if (keepdims) {{
+                        output_strides_input_idx++;
+                    }}
+                }} else {{
+                    output_strides_input[i] = output_strides [output_strides_input_idx];
+                    output_strides_input_idx++;
+                }}
+            }}
+            
+            // initialize output to negative infinity
+            """ +
+            "\n".join([f"for (long long i{i} = 0; i{i} < output_shape[{i}]; i{i}++) {{" for i in range(len(reduced_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides [{i}] * i{i}" for i in range(len(reduced_desc.shape))]) + "] = -INFINITY;" + "\n" +
+            "\n".join(["}" for _ in reduced_desc.shape]) + "\n" +
+            """
+            
+            // Loop over all input elements
+            """ + 
+            "\n".join([f"for (long long i{i} = 0; i{i} < input_shape[{i}]; i{i}++) {{" for i in range(len(data_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides_input[{i}] * i{i}" for i in range(len(data_desc.shape))]) +"]" +
+            " = std::max(out [" + " + ".join([f"output_strides_input[{i}] * i{i}" for i in range(len(data_desc.shape))]) + "], " +
+            "inp [" + " + ".join([f"input_strides[{i}] * i{i}" for i in range(len(data_desc.shape))]) + "]);" + "\n" +
+            "\n".join(["}" for _ in data_desc.shape]) + "\n" +
+            """
+        """)
+        tasklet = nstate.add_tasklet(
+            f'reduce_max_{uid}',
+            {'inp': dace.pointer(data_desc.dtype), 'axes_arr': axes_desc.dtype},
+            {'out': dace.pointer(reduced_desc.dtype)},
+            tasklet_code,
+            language=dace.Language.CPP)
+        nstate.add_edge(data_read, None, tasklet, 'inp', nsdfg.make_array_memlet(data_name))
+        nstate.add_edge(axes_node, None, tasklet, 'axes_arr', nsdfg.make_array_memlet(axes_name))
+        nstate.add_edge(tasklet, 'out', reduced_write, None, nsdfg.make_array_memlet(reduced_name))
+        return nsdfg
+
+
+@op_implementation(op="ReduceMin", name="pure")
+class PureReduceMin(ONNXForward):
+    @staticmethod
+    def forward_can_be_applied(node: 'ONNXOp', state: SDFGState, sdfg: SDFG) -> bool:
+        return True
+
+    @staticmethod
+    def forward(node: 'ONNXOp', state: SDFGState, sdfg: SDFG) -> typing.Union[Node, SDFG]:
+        keepdims = getattr(node, 'keepdims', 1)
+        noop_with_empty_axes = getattr(node, 'noop_with_empty_axes', 0)
+        uid = state.node_id(node)
+        nsdfg = SDFG(f'reduce_min_{uid}')
+        nstate = nsdfg.add_state(f'reduce_min_{uid}')
+        data_desc = copy.deepcopy(in_desc_with_name(node, state, sdfg, "data"))
+        reduced_desc = copy.deepcopy(out_desc_with_name(node, state, sdfg, "reduced"))
+        data_name = f"data"
+        reduced_name = f"reduced"
+        nsdfg.add_datadesc(data_name, data_desc)
+        nsdfg.add_datadesc(reduced_name, reduced_desc)
+        nsdfg.arrays[data_name].transient = False
+        nsdfg.arrays[reduced_name].transient = False
+        data_read = nstate.add_read(data_name)
+        reduced_write = nstate.add_write(reduced_name)
+        axes_name = f"axes"
+        if axes_name in node.in_connectors:
+            [axes_edge] = state.in_edges_by_connector(node, 'axes')
+            axes_desc = copy.deepcopy(sdfg.arrays[axes_edge.data.data])
+            nsdfg.add_datadesc(axes_name, axes_desc)
+            nsdfg.arrays[axes_name].transient = False
+            axes_node = nstate.add_access(axes_name)
+        else:
+            axes = getattr(node, axes_name, None)
+            if not axes:
+                if noop_with_empty_axes:
+                    axes_values = []
+                else:
+                    axes_values = list(range(len(data_desc.shape)))
+            else:
+                axes_values = list(axes)
+            axes_arr_shape = [len(axes_values)]
+            axes_arr_dtype = dace.int64
+            _, axes_desc = nsdfg.add_array(axes_name, axes_arr_shape, axes_arr_dtype)
+            axes_node = nstate.add_access(axes_name)
+            axes_init_tasklet = nstate.add_tasklet(
+                f"init_axes",
+                set(),
+                {"out": dace.pointer(axes_arr_dtype)},
+                "\n".join([f"out [{idx}] = {val};" for idx, val in enumerate(axes_values)]),
+                language=dace.Language.CPP
+            )
+            nstate.add_edge(axes_init_tasklet, "out", axes_node, None, dace.Memlet(f"{axes_name}[0:{len(axes_values)}]"))
+
+        is_axes_scalar = len(axes_desc.shape) == 1 and axes_desc.shape[0] == 1
+
+        # Create the reduction tasklet with embedded constants
+        tasklet_code = (f"""
+            constexpr long long input_dims = {len(data_desc.shape)};
+            constexpr long long output_dims = {len(reduced_desc.shape)};
+            constexpr long long num_reduce_dims = {len(axes_desc.shape)};
+            constexpr long long num_non_reduce_dims = {len(data_desc.shape) - len(axes_desc.shape)};
+            constexpr long long keepdims = {keepdims};
+            long long reduce_dims[num_reduce_dims] = """ +
+            ("{axes_arr};" if is_axes_scalar else f'{{{", ".join([f"axes_arr[{i}]" for i in range(len(axes_desc.shape))])}}};') +
+            f""" 
+
+            long long input_shape [input_dims] = {{{", ".join([str(data_desc.shape[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_shape [output_dims] = {{{", ".join([str(reduced_desc.shape[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long input_strides [input_dims] = {{{", ".join([str(data_desc.strides[i]) for i in range(len(data_desc.shape))])}}};
+            long long output_strides [output_dims] = {{{", ".join([str(reduced_desc.strides[i]) for i in range(len(reduced_desc.shape))])}}};
+            long long output_strides_input [input_dims];
+            long long output_strides_input_idx = 0;
+            for (long long i = 0; i < input_dims; i++) {{
+                int is_reduce_dim = 0;
+                for (long long j = 0; j < num_reduce_dims; j++) {{
+                    if (reduce_dims[j] == i) {{
+                        is_reduce_dim = 1;
+                        break;
+                    }}
+                }}
+                if (is_reduce_dim) {{
+                    output_strides_input[i] = 0;
+                    if (keepdims) {{
+                        output_strides_input_idx++;
+                    }}
+                }} else {{
+                    output_strides_input[i] = output_strides [output_strides_input_idx];
+                    output_strides_input_idx++;
+                }}
+            }}
+            
+            // initialize output to positive infinity
+            """ +
+            "\n".join([f"for (long long i{i} = 0; i{i} < output_shape[{i}]; i{i}++) {{" for i in range(len(reduced_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides [{i}] * i{i}" for i in range(len(reduced_desc.shape))]) + "] = INFINITY;" + "\n" +
+            "\n".join(["}" for _ in reduced_desc.shape]) + "\n" +
+            """
+            
+            // Loop over all input elements
+            """ + 
+            "\n".join([f"for (long long i{i} = 0; i{i} < input_shape[{i}]; i{i}++) {{" for i in range(len(data_desc.shape))]) + "\n" +
+            "out [" + " + ".join([f"output_strides_input[{i}] * i{i}" for i in range(len(data_desc.shape))]) +"]" +
+            " = std::min(out [" + " + ".join([f"output_strides_input[{i}] * i{i}" for i in range(len(data_desc.shape))]) + "], " +
+            "inp [" + " + ".join([f"input_strides[{i}] * i{i}" for i in range(len(data_desc.shape))]) + "]);" + "\n" +
+            "\n".join(["}" for _ in data_desc.shape]) + "\n" +
+            """
+        """)
+        tasklet = nstate.add_tasklet(
+            f'reduce_min_{uid}',
+            {'inp': dace.pointer(data_desc.dtype), 'axes_arr': axes_desc.dtype},
+            {'out': dace.pointer(reduced_desc.dtype)},
+            tasklet_code,
+            language=dace.Language.CPP)
+        nstate.add_edge(data_read, None, tasklet, 'inp', nsdfg.make_array_memlet(data_name))
+        nstate.add_edge(axes_node, None, tasklet, 'axes_arr', nsdfg.make_array_memlet(axes_name))
+        nstate.add_edge(tasklet, 'out', reduced_write, None, nsdfg.make_array_memlet(reduced_name))
         return nsdfg

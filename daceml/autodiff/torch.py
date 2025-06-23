@@ -49,7 +49,6 @@ def make_backward_function(
         backward_sdfg=backward_sdfg,
         backward_state=backward_state,
         zero_non_transients=False)
-
     backward_result, backward_grad_arrays, backward_input_arrays = gen.backward(
     )
 

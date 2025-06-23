@@ -201,7 +201,7 @@ for schema in _get_latest_schemas():
         for name, attr in dace_schema.attributes.items() if attr.required
     }
 
-    def __init__(self, name, *args, location=None, **op_attributes):
+    def __init__(self, name, *args, location=None, optional=set(), **op_attributes):
         super(onnx_op.ONNXOp, self).__init__(
             name,
             location=location,
@@ -209,12 +209,16 @@ for schema in _get_latest_schemas():
             inputs={
                 inp.name
                 for inp in self.schema.inputs
-                if inp.param_type == ONNXParameterType.Single
+                if inp.param_type == ONNXParameterType.Single or (
+                    inp.name in optional and inp.param_type == ONNXParameterType.Optional
+                )
             },
             outputs={
                 out.name
                 for out in self.schema.outputs
-                if out.param_type == ONNXParameterType.Single
+                if out.param_type == ONNXParameterType.Single or (
+                    out.name in optional and out.param_type == ONNXParameterType.Optional
+                )
             })
         self.backward_implementation = None
 

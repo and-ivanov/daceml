@@ -130,7 +130,7 @@ def test_weights_ln(sdfg_name, gpu):
             x = self.fc3(x)
             return x
 
-    run_pytorch_module(Module(), sdfg_name, gpu, shape=(4, 784), use_max=False)
+    run_pytorch_module(Module(), sdfg_name, gpu, shape=(4, 784), use_max=False, auto_optimize=False)
 
 
 def test_layernorm(sdfg_name, gpu):
@@ -164,7 +164,7 @@ def test_weights(sdfg_name, gpu):
             x = self.fc3(x)
             return x
 
-    run_pytorch_module(Module(), sdfg_name, gpu, shape=(4, 784), use_max=False)
+    run_pytorch_module(Module(), sdfg_name, gpu, shape=(4, 784), use_max=False, auto_optimize=False)
 
 
 def test_nested_gradient_summation(sdfg_name, gpu):
